@@ -1,12 +1,16 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# zolab: Cilium Gateway API (Gateway `eg` in kube-system), CloudNativePG,
-# Synology iSCSI block storage for ReadWriteOnce volumes.
+# zolab: Cilium Gateway API (Gateway `eg` in kube-system), CloudNativePG on
+# Synology iSCSI block storage, Paperclip data on NFS (nfs-isolated).
 #
 # Hostnames are deliberately not committed (public repo). Copy
 # hostnames.env.example to hostnames.env (git-ignored) and fill it in;
 # `kustomize build` fails until it exists.
+# Applies to the components below as well: a base's `namespace` does not
+# reach resources added by components in an overlay.
+namespace: paperclip
+
 resources:
   - ../../base
   - ciliumnetworkpolicy.yaml
@@ -55,15 +59,17 @@ replacements:
           - data.PAPERCLIP_PUBLIC_URL
 
 patches:
-  # ReadWriteOnce volumes -> synology-iscsi. (Nothing here needs
-  # ReadWriteMany; zolab's RWX class is nfs-isolated if that changes.)
+  # Paperclip's data volume (PAPERCLIP_HOME) on NFS. Still ReadWriteOnce:
+  # the Deployment runs a single replica.
   - target:
       kind: PersistentVolumeClaim
       name: paperclip-data
     patch: |-
       - op: add
         path: /spec/storageClassName
-        value: synology-iscsi
+        value: nfs-isolated
+  # PostgreSQL stays on block storage (iSCSI): NFS is not recommended for
+  # database files.
   - target:
       group: postgresql.cnpg.io
       kind: Cluster

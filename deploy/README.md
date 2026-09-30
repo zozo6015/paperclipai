@@ -78,8 +78,9 @@ kubectl -n paperclip create secret generic paperclip-db-app \
 ### zolab
 
 Cluster facts used by the overlay: Cilium Gateway API with Gateway `eg` in
-`kube-system`, CloudNativePG, `synology-iscsi` for ReadWriteOnce volumes
-(`nfs-isolated` is the RWX class; nothing here currently needs RWX).
+`kube-system`, CloudNativePG on `synology-iscsi` (block storage), and
+Paperclip's `paperclip-data` volume on `nfs-isolated` (NFS). PostgreSQL stays
+on iSCSI because NFS is not recommended for database files.
 
 The CNPG operator runs in `cnpg-system`. Paperclip is private (not reachable
 from the internet), hence `PAPERCLIP_DEPLOYMENT_EXPOSURE=private`.
