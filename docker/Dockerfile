@@ -61,6 +61,29 @@ RUN --mount=type=cache,id=paperclip-npm,target=/root/.npm \
     test -f node_modules/@paperclipai/server/dist/index.js; \
     test -f node_modules/@paperclipai/server/ui-dist/index.html
 
+# npm for the runtime image (Paperclip shells out to it for plugin installs).
+# Pinned release; bundled dependencies with known CVEs that npm has not
+# released a fix for yet are replaced by their fixed patch releases (both stay
+# within the ranges npm declares). Drop NPM_PATCHES entries once npm ships them.
+ARG NPM_VERSION=12.2.0
+ARG NPM_PATCHES="brace-expansion@5.0.11 undici@6.28.1"
+RUN --mount=type=cache,id=paperclip-npm,target=/root/.npm \
+    set -eux; \
+    mkdir -p /opt/npm /tmp/npm-pack; \
+    cd /tmp/npm-pack; \
+    npm pack --silent "npm@${NPM_VERSION}"; \
+    tar -xzf "npm-${NPM_VERSION}.tgz" -C /opt/npm --strip-components=1; \
+    for spec in $NPM_PATCHES; do \
+      name="${spec%@*}"; ver="${spec##*@}"; \
+      test -d "/opt/npm/node_modules/$name"; \
+      npm pack --silent "$spec"; \
+      rm -rf "/opt/npm/node_modules/$name"; \
+      mkdir -p "/opt/npm/node_modules/$name"; \
+      tar -xzf "$name-$ver.tgz" -C "/opt/npm/node_modules/$name" --strip-components=1; \
+    done; \
+    node /opt/npm/bin/npm-cli.js --version; \
+    rm -rf /tmp/npm-pack
+
 # -----------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS distroless-ref
 
@@ -72,7 +95,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=distroless-ref / /distroless/
 # npm is pure JavaScript, so the build-platform copy works on any target.
-COPY --from=install /usr/local/lib/node_modules/npm /rootfs/usr/local/lib/node_modules/npm
+COPY --from=install /opt/npm /rootfs/usr/local/lib/node_modules/npm
 # Assemble /rootfs: requested binaries + git helpers + every shared library
 # they need that the distroless base does not already ship. The distroless
 # base is merged-/usr (/bin -> usr/bin), so everything lands under /usr.
@@ -102,17 +125,50 @@ RUN set -eux; \
       cp -a "$real" "/rootfs$real"; \
       [ "$lib" = "$real" ] || ln -sf "$real" "/rootfs$lib"; \
     done; \
-    # Anything outside /usr and /var would replace the distroless base's
-    # merged-/usr symlinks (/lib -> usr/lib, /bin -> usr/bin) on COPY.
-    for d in /rootfs/*; do \
-      case "$d" in /rootfs/usr|/rootfs/var) ;; *) echo "unexpected top-level path in overlay: $d" >&2; exit 1 ;; esac; \
-    done; \
     pkgs="$(for f in $bins $helpers $libs; do dpkg -S "$(readlink -f "$f")" 2>/dev/null || dpkg -S "$f" 2>/dev/null || true; done \
             | cut -d: -f1 | tr ',' '\n' | tr -d ' ' | sort -u)"; \
     for p in $pkgs; do \
       name="${p%%:*}"; \
       [ -e "/distroless/var/lib/dpkg/status.d/$name" ] && continue; \
       dpkg-query -s "$p" > "/rootfs/var/lib/dpkg/status.d/$name"; \
+    done
+
+# Debian security updates the pinned distroless base does not carry yet:
+# every package the base ships whose Debian candidate (incl. trixie-security)
+# is newer is overlaid with that version's files and dpkg metadata, so both
+# the image and its scanner results reflect the fix. No-op once the base
+# digest is bumped to a rebuilt distroless image.
+RUN set -eux; \
+    apt-get update; \
+    mkdir -p /tmp/debs; cd /tmp/debs; \
+    for st in /distroless/var/lib/dpkg/status.d/*; do \
+      case "$st" in *.md5sums) continue ;; esac; \
+      pkg="$(sed -n 's/^Package: //p' "$st" | head -n1)"; \
+      have="$(sed -n 's/^Version: //p' "$st" | head -n1)"; \
+      [ -n "$pkg" ] && [ -n "$have" ] || continue; \
+      cand="$(apt-cache policy "$pkg" | sed -n 's/^ *Candidate: //p')"; \
+      case "$cand" in ""|"(none)") continue ;; esac; \
+      dpkg --compare-versions "$cand" gt "$have" || continue; \
+      echo "security update for distroless base: $pkg $have -> $cand"; \
+      apt-get download "$pkg=$cand"; \
+      deb="$(ls ./*.deb)"; \
+      mkdir x; dpkg-deb -x "$deb" x; \
+      for d in bin sbin lib lib32 lib64 libx32; do \
+        # base-files ships the /bin -> usr/bin style links itself; the base
+        # already has them. Real directories are folded into /usr.
+        if [ -L "x/$d" ]; then rm -f "x/$d"; \
+        elif [ -d "x/$d" ]; then mkdir -p "x/usr/$d"; cp -a "x/$d/." "x/usr/$d/"; rm -rf "x/$d"; fi; \
+      done; \
+      rm -rf x/usr/share/doc x/usr/share/man x/usr/share/lintian; \
+      cp -a x/. /rootfs/; \
+      { dpkg-deb -f "$deb"; echo "Status: install ok installed"; } > "/rootfs/var/lib/dpkg/status.d/$(basename "$st")"; \
+      rm -rf x "$deb"; \
+    done; \
+    rm -rf /var/lib/apt/lists/* /tmp/debs; \
+    # The overlay must not replace the distroless base's merged-/usr symlinks
+    # (/bin -> usr/bin, /lib -> usr/lib, ...) when it is copied in.
+    for d in bin sbin lib lib32 lib64 libx32; do \
+      if [ -e "/rootfs/$d" ] || [ -L "/rootfs/$d" ]; then echo "overlay must not contain /$d" >&2; exit 1; fi; \
     done
 
 # -----------------------------------------------------------------------------
