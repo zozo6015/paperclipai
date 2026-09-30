@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: paperclip-ci
+  labels:
+    # Rootless BuildKit needs seccomp/AppArmor "Unconfined" to create user
+    # namespaces, which the baseline/restricted profiles reject. It still
+    # runs as UID 1000, unprivileged, with no added capabilities. Keep this
+    # namespace dedicated to builds.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

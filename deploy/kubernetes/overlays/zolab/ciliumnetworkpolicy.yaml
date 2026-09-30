@@ -1,0 +1,18 @@
+# Cilium's Gateway API implementation proxies through Envoy with the
+# reserved "ingress" identity, which a plain NetworkPolicy cannot select.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: paperclip-server-from-gateway
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: paperclip
+      app.kubernetes.io/component: server
+  ingress:
+    - fromEntities:
+        - ingress
+      toPorts:
+        - ports:
+            - port: "3100"
+              protocol: TCP

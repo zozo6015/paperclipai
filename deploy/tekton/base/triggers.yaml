@@ -1,0 +1,110 @@
+# GitHub push webhook -> PipelineRun.
+#   push to main       -> sha-<commit> + latest
+#   push of tag v*     -> sha-<commit> + <tag>
+# The webhook secret is validated by the GitHub interceptor before anything
+# else runs.
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: paperclip-github-push
+spec:
+  params:
+    - name: git-url
+      value: $(body.repository.clone_url)
+    - name: git-revision
+      value: $(body.after)
+    - name: release-tag
+      value: $(extensions.release_tag)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: paperclip-image
+spec:
+  params:
+    - name: git-url
+    - name: git-revision
+    - name: release-tag
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: paperclip-image-
+        labels:
+          app.kubernetes.io/part-of: paperclip-ci
+      spec:
+        pipelineRef:
+          name: paperclip-image
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: release-tags
+            value: ["$(tt.params.release-tag)"]
+        timeouts:
+          pipeline: 2h0m0s
+        taskRunTemplate:
+          serviceAccountName: paperclip-build
+          podTemplate:
+            securityContext:
+              runAsNonRoot: true
+              fsGroup: 65532
+        workspaces:
+          - name: dockerconfig
+            secret:
+              secretName: ghcr-credentials
+              items:
+                - key: .dockerconfigjson
+                  path: config.json
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: paperclip-github
+spec:
+  serviceAccountName: paperclip-triggers
+  triggers:
+    - name: push
+      interceptors:
+        - ref:
+            name: github
+          params:
+            - name: secretRef
+              value:
+                secretName: github-webhook-secret
+                secretKey: secretToken
+            - name: eventTypes
+              value: ["push"]
+        - ref:
+            name: cel
+          params:
+            - name: filter
+              value: >-
+                body.deleted == false &&
+                (body.ref == 'refs/heads/main' || body.ref.startsWith('refs/tags/v'))
+            - name: overlays
+              value:
+                - key: release_tag
+                  expression: >-
+                    body.ref.startsWith('refs/tags/') ? body.ref.split('/')[2] : 'latest'
+      bindings:
+        - ref: paperclip-github-push
+      template:
+        ref: paperclip-image
+  resources:
+    kubernetesResource:
+      spec:
+        template:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    memory: 256Mi

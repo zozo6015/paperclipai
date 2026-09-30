@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# PostgreSQL managed by the CloudNativePG operator (must already be installed
+# in the cluster). CNPG generates the `paperclip-db-app` Secret whose `uri`
+# key the Deployment reads as DATABASE_URL.
+resources:
+  - cluster.yaml
+  - networkpolicy.yaml

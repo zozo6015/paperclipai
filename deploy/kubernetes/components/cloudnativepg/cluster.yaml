@@ -1,0 +1,23 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: paperclip-db
+spec:
+  # One primary + one streaming replica. The PostgreSQL image is left to the
+  # installed operator's default; pin spec.imageName in an overlay if needed.
+  instances: 2
+  primaryUpdateStrategy: unsupervised
+  enableSuperuserAccess: false
+  bootstrap:
+    initdb:
+      database: paperclip
+      owner: paperclip
+  storage:
+    # storageClass is set by the overlay (unset = cluster default).
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi

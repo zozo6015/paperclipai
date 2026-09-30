@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# zolab: GitHub webhook reaches the EventListener through the Cilium
+# Gateway `eg` (kube-system) at https://zozotk.go.ro/.
+resources:
+  - ../../base
+  - httproute.yaml
+  - networkpolicy.yaml
