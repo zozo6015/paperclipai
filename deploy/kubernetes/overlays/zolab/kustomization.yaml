@@ -1,0 +1,94 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# zolab: Cilium Gateway API (Gateway `eg` in kube-system), CloudNativePG,
+# Synology iSCSI block storage for ReadWriteOnce volumes.
+#
+# Hostnames are deliberately not committed (public repo). Copy
+# hostnames.env.example to hostnames.env (git-ignored) and fill it in;
+# `kustomize build` fails until it exists.
+resources:
+  - ../../base
+  - ciliumnetworkpolicy.yaml
+
+components:
+  - ../../components/cloudnativepg
+  - ../../components/gateway-api
+  # - ../../components/kubernetes-sandbox
+
+images:
+  - name: paperclip
+    newName: ghcr.io/zozo6015/paperclipai
+    newTag: latest # pin to a sha-<commit> tag or digest produced by Tekton
+
+# Local-only values, injected below; the local-config annotation keeps this
+# ConfigMap out of the rendered output.
+configMapGenerator:
+  - name: zolab-hostnames
+    envs:
+      - hostnames.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: zolab-hostnames
+      fieldPath: data.PAPERCLIP_HOSTNAME
+    targets:
+      - select:
+          kind: HTTPRoute
+          name: paperclip
+        fieldPaths:
+          - spec.hostnames.0
+  - source:
+      kind: ConfigMap
+      name: zolab-hostnames
+      fieldPath: data.PAPERCLIP_PUBLIC_URL
+    targets:
+      - select:
+          kind: ConfigMap
+          name: paperclip-config
+        fieldPaths:
+          - data.PAPERCLIP_PUBLIC_URL
+
+patches:
+  # ReadWriteOnce volumes -> synology-iscsi. (Nothing here needs
+  # ReadWriteMany; zolab's RWX class is nfs-isolated if that changes.)
+  - target:
+      kind: PersistentVolumeClaim
+      name: paperclip-data
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: synology-iscsi
+  - target:
+      group: postgresql.cnpg.io
+      kind: Cluster
+      name: paperclip-db
+    patch: |-
+      - op: add
+        path: /spec/storage/storageClass
+        value: synology-iscsi
+
+  # Gateway API route on the Cilium Gateway `eg` in kube-system.
+  - target:
+      kind: HTTPRoute
+      name: paperclip
+    patch: |-
+      - op: replace
+        path: /spec/parentRefs
+        value:
+          - name: eg
+            namespace: kube-system
+
+  # Ingress to the server is admitted only from the Cilium Gateway (see
+  # ciliumnetworkpolicy.yaml); drop the base "any source" rule.
+  - target:
+      kind: NetworkPolicy
+      name: paperclip-server
+    patch: |-
+      - op: remove
+        path: /spec/ingress/0

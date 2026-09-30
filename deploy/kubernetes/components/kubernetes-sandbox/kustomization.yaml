@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# OPTIONAL. Lets the Paperclip server run agents in isolated pods via the
+# upstream @paperclipai/plugin-kubernetes sandbox provider (prebuilt into the
+# image at /app/packages/plugins/sandbox-providers/kubernetes). The image
+# ships no coding-agent CLIs, so agents must run in sandboxes or via remote
+# adapters.
+#
+# SECURITY: the provider creates one namespace per company at runtime, so it
+# needs a ClusterRole that includes Secrets and pods/exec in every namespace.
+# Only enable this on a cluster dedicated to (or trusted with) Paperclip.
+resources:
+  - rbac.yaml
+
+patches:
+  - target:
+      kind: ServiceAccount
+      name: paperclip
+    patch: |-
+      - op: replace
+        path: /automountServiceAccountToken
+        value: true
+  - target:
+      kind: Deployment
+      name: paperclip
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/automountServiceAccountToken
+        value: true
+  - target:
+      kind: NetworkPolicy
+      name: paperclip-server
+    patch: |-
+      - op: add
+        path: /spec/egress/-
+        value:
+          ports:
+            - port: 6443
+              protocol: TCP

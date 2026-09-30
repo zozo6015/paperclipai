@@ -1,0 +1,78 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: paperclip-image
+spec:
+  description: >-
+    Build the Paperclip image from this repository's docker/Dockerfile, push
+    sha-<commit> to the registry, scan it, and only then add the release
+    tags (latest / vX.Y.Z).
+  params:
+    - name: git-url
+      description: Clone URL of this repository (holds docker/Dockerfile)
+    - name: git-revision
+      description: Commit SHA to build
+    - name: image
+      default: ghcr.io/zozo6015/paperclipai
+    - name: platforms
+      default: linux/amd64
+    - name: release-tags
+      type: array
+      default: []
+      description: Tags added after a clean scan, e.g. ["latest"] or ["v1.2.3"]
+    - name: build-args
+      type: array
+      default: []
+      description: >-
+        Extra KEY=VALUE Dockerfile build args, e.g. PAPERCLIP_REF=<upstream sha>
+        to build a different upstream Paperclip commit than the Dockerfile pin.
+    - name: scan-severity
+      default: CRITICAL,HIGH
+  workspaces:
+    - name: dockerconfig
+  tasks:
+    - name: build
+      taskRef:
+        name: buildkit-build-push
+      params:
+        - name: context
+          value: $(params.git-url)#$(params.git-revision)
+        - name: dockerfile
+          value: docker/Dockerfile
+        - name: image
+          value: $(params.image)
+        - name: tag
+          value: sha-$(params.git-revision)
+        - name: platforms
+          value: $(params.platforms)
+        - name: build-args
+          value: ["$(params.build-args[*])"]
+      workspaces:
+        - name: dockerconfig
+          workspace: dockerconfig
+    - name: scan
+      runAfter: [build]
+      taskRef:
+        name: trivy-scan
+      params:
+        - name: image-ref
+          value: $(tasks.build.results.IMAGE_URL)
+        - name: severity
+          value: $(params.scan-severity)
+      workspaces:
+        - name: dockerconfig
+          workspace: dockerconfig
+    - name: promote
+      runAfter: [scan]
+      taskRef:
+        name: crane-tag
+      params:
+        - name: image
+          value: $(params.image)
+        - name: digest
+          value: $(tasks.build.results.IMAGE_DIGEST)
+        - name: tags
+          value: ["$(params.release-tags[*])"]
+      workspaces:
+        - name: dockerconfig
+          workspace: dockerconfig

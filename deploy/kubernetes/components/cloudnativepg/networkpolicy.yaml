@@ -1,0 +1,70 @@
+# Allows for the CNPG instances on top of the namespace default-deny.
+# Assumes the operator runs in its default namespace `cnpg-system`; patch the
+# namespaceSelector if yours differs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: paperclip-db
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: paperclip-db
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Paperclip server -> PostgreSQL
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: paperclip
+              app.kubernetes.io/component: server
+      ports:
+        - port: 5432
+          protocol: TCP
+    # Replication and instance-manager traffic between cluster members
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: paperclip-db
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 8000
+          protocol: TCP
+    # CNPG operator -> instance manager status endpoint
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - port: 8000
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: paperclip-db
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 8000
+          protocol: TCP
+    # Kubernetes API server (the instance manager watches its Cluster CR)
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP

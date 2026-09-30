@@ -1,0 +1,17 @@
+# The EventListener accepts traffic only from the Cilium Gateway.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: eventlistener-from-gateway
+  namespace: paperclip-ci
+spec:
+  endpointSelector:
+    matchLabels:
+      eventlistener: paperclip-github
+  ingress:
+    - fromEntities:
+        - ingress
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP

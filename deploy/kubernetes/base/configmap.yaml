@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: paperclip-config
+data:
+  # Login is always required. "private" trusts only the hostname of
+  # PAPERCLIP_PUBLIC_URL (plus PAPERCLIP_ALLOWED_HOSTNAMES); switch to "public"
+  # for an internet-facing instance (see upstream docs/deploy/deployment-modes.md).
+  PAPERCLIP_DEPLOYMENT_MODE: authenticated
+  PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+  # REQUIRED: the external URL users open. Overlays must override it.
+  PAPERCLIP_PUBLIC_URL: https://paperclip.example.com
+  HOST: 0.0.0.0
+  PORT: "3100"
+  SERVE_UI: "true"
+  # Migrations are applied on start (the server auto-applies without a TTY;
+  # this makes it explicit).
+  PAPERCLIP_MIGRATION_AUTO_APPLY: "true"

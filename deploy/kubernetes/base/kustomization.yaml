@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Cluster-agnostic base. It deliberately sets no StorageClass, no ingress /
+# Gateway and no database: pick those with components and an overlay
+# (see overlays/zolab for a complete example).
+namespace: paperclip
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: paperclip
+      app.kubernetes.io/part-of: paperclip
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+
+images:
+  - name: paperclip
+    newName: ghcr.io/zozo6015/paperclipai
+    newTag: latest

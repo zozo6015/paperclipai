@@ -1,0 +1,89 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: buildkit-build-push
+spec:
+  description: >-
+    Builds an image with rootless BuildKit straight from a git context
+    (no clone, no PVC), pushes it with SBOM and provenance attestations and a
+    registry build cache, and returns the pushed digest.
+  params:
+    - name: context
+      description: Git build context, e.g. https://github.com/org/repo.git#<commit>
+    - name: dockerfile
+      default: Dockerfile
+    - name: image
+      description: Image repository without tag, e.g. ghcr.io/org/app
+    - name: tag
+      description: Tag pushed by the build (further tags are added after the scan)
+    - name: platforms
+      default: linux/amd64
+    - name: build-args
+      type: array
+      default: []
+      description: KEY=VALUE build arguments
+  workspaces:
+    - name: dockerconfig
+      description: Secret with a docker config.json that can push to the registry
+      readOnly: true
+  results:
+    - name: IMAGE_DIGEST
+    - name: IMAGE_URL
+  volumes:
+    - name: buildkit-state
+      emptyDir: {}
+    - name: tmp
+      emptyDir: {}
+  steps:
+    - name: build-push
+      image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+      env:
+        - name: BUILDKITD_FLAGS
+          value: --oci-worker-no-process-sandbox
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: Unconfined
+        appArmorProfile:
+          type: Unconfined
+      computeResources:
+        requests:
+          cpu: "2"
+          memory: 6Gi
+        limits:
+          memory: 12Gi
+      volumeMounts:
+        - name: buildkit-state
+          mountPath: /home/user/.local/share/buildkit
+        - name: tmp
+          mountPath: /tmp
+      args: ["$(params.build-args[*])"]
+      script: |
+        #!/bin/sh
+        set -eu
+        build_args=""
+        for kv in "$@"; do
+          build_args="$build_args --opt build-arg:$kv"
+        done
+        # shellcheck disable=SC2086
+        buildctl-daemonless.sh build \
+          --frontend dockerfile.v0 \
+          --opt context="$(params.context)" \
+          --opt filename="$(params.dockerfile)" \
+          --opt platform="$(params.platforms)" \
+          --opt attest:sbom= \
+          --opt attest:provenance=mode=max \
+          $build_args \
+          --import-cache type=registry,ref="$(params.image):buildcache" \
+          --export-cache type=registry,ref="$(params.image):buildcache",mode=max,image-manifest=true,oci-mediatypes=true \
+          --output type=image,name="$(params.image):$(params.tag)",push=true,oci-mediatypes=true \
+          --metadata-file /tmp/metadata.json
+        digest="$(sed -n 's/.*"containerimage.digest": *"\([^"]*\)".*/\1/p' /tmp/metadata.json)"
+        test -n "$digest"
+        printf '%s' "$digest" > "$(results.IMAGE_DIGEST.path)"
+        printf '%s' "$(params.image)@$digest" > "$(results.IMAGE_URL.path)"
+        echo "pushed $(params.image):$(params.tag) @ $digest"

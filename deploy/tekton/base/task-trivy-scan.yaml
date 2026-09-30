@@ -1,0 +1,54 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: trivy-scan
+spec:
+  description: Fails when the image has fixable vulnerabilities at the given severities.
+  params:
+    - name: image-ref
+      description: Image reference, preferably by digest (repo@sha256:...)
+    - name: severity
+      default: CRITICAL,HIGH
+  workspaces:
+    - name: dockerconfig
+      readOnly: true
+  volumes:
+    - name: tmp
+      emptyDir: {}
+  steps:
+    - name: scan
+      image: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+        - name: HOME
+          value: /tmp
+        - name: TRIVY_CACHE_DIR
+          value: /tmp/trivy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      computeResources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          memory: 4Gi
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      args:
+        - image
+        - --no-progress
+        - --exit-code=1
+        - --ignore-unfixed
+        - --scanners=vuln,secret
+        - --severity=$(params.severity)
+        - $(params.image-ref)
