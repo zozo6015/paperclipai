@@ -172,6 +172,12 @@ RUN set -eux; \
     done
 
 # -----------------------------------------------------------------------------
+# Tiny side target the CI reads to tag the image with the Paperclip release it
+# contains (`--target version`); reuses the cached install stage.
+FROM scratch AS version
+COPY --from=install /opt/paperclip/node_modules/@paperclipai/server/package.json /server-package.json
+
+# -----------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="paperclip" \
       org.opencontainers.image.description="Paperclip AI server (distroless, non-root)" \

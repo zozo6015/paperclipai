@@ -9,6 +9,9 @@ spec:
     - name: digest
     - name: tags
       type: array
+    - name: version-tag
+      default: ""
+      description: Optional extra tag, e.g. the Paperclip version in the image
   workspaces:
     - name: dockerconfig
       readOnly: true
@@ -35,7 +38,7 @@ spec:
       script: |
         #!/busybox/sh
         set -eu
-        for t in "$@"; do
+        for t in "$@" "$(params.version-tag)"; do
           [ -n "$t" ] || continue
           crane tag "$(params.image)@$(params.digest)" "$t"
           echo "tagged $(params.image):$t -> $(params.digest)"

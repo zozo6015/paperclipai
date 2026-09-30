@@ -135,7 +135,8 @@ Pipeline `paperclip-image`: BuildKit (rootless) builds straight from the git
 commit with SBOM and provenance attestations and a registry cache, then pushes
 `sha-<commit>`. Trivy fails the run on fixable HIGH/CRITICAL findings, and
 only a clean image is tagged `latest` (push to `main`) or `vX.Y.Z` (push of a
-`v*` tag).
+`v*` tag), plus the version of the Paperclip release inside it (e.g.
+`2026.916.1`, read from the installed `@paperclipai/server`).
 
 Images are multi-arch (`linux/amd64,linux/arm64`, pipeline parameter
 `platforms`). The build node's own architecture builds natively; the other one

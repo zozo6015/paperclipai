@@ -29,6 +29,8 @@ spec:
   results:
     - name: IMAGE_DIGEST
     - name: IMAGE_URL
+    - name: PAPERCLIP_VERSION
+      description: Version of @paperclipai/server installed in the image
   volumes:
     - name: buildkit-state
       emptyDir: {}
@@ -87,3 +89,18 @@ spec:
         printf '%s' "$digest" > "$(results.IMAGE_DIGEST.path)"
         printf '%s' "$(params.image)@$digest" > "$(results.IMAGE_URL.path)"
         echo "pushed $(params.image):$(params.tag) @ $digest"
+
+        # Read the installed Paperclip version from the Dockerfile's `version`
+        # target (same context/args, served from the local build cache).
+        # shellcheck disable=SC2086
+        buildctl-daemonless.sh build \
+          --frontend dockerfile.v0 \
+          --opt context="$(params.context)" \
+          --opt filename="$(params.dockerfile)" \
+          --opt target=version \
+          $build_args \
+          --output type=local,dest=/tmp/version
+        version="$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' /tmp/version/server-package.json | head -n1)"
+        echo "$version" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
+        printf '%s' "$version" > "$(results.PAPERCLIP_VERSION.path)"
+        echo "paperclip version: $version"

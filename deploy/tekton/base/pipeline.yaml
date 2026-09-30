@@ -6,7 +6,8 @@ spec:
   description: >-
     Build the Paperclip image from this repository's docker/Dockerfile, push
     sha-<commit> to the registry, scan it, and only then add the release
-    tags (latest / vX.Y.Z).
+    tags (latest / vX.Y.Z) and the version of the Paperclip release inside
+    the image (e.g. 2026.916.1).
   params:
     - name: git-url
       description: Clone URL of this repository (holds docker/Dockerfile)
@@ -80,6 +81,8 @@ spec:
           value: $(tasks.build.results.IMAGE_DIGEST)
         - name: tags
           value: ["$(params.release-tags[*])"]
+        - name: version-tag
+          value: $(tasks.build.results.PAPERCLIP_VERSION)
       workspaces:
         - name: dockerconfig
           workspace: dockerconfig
