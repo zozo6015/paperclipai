@@ -95,10 +95,17 @@ RUN set -eux; \
     libs="$(for f in $bins $helpers; do ldd "$f" 2>/dev/null | awk '/=> \//{print $3}'; done | sort -u)"; \
     for lib in $libs; do \
       real="$(readlink -f "$lib")"; \
+      # ldd reports /lib/...; on merged-/usr systems that is /usr/lib/...
+      case "$lib" in /lib/*|/lib64/*) lib="/usr$lib" ;; esac; \
       if [ -e "/distroless$lib" ] || [ -e "/distroless$real" ]; then continue; fi; \
-      mkdir -p "/rootfs$(dirname "$lib")"; \
+      mkdir -p "/rootfs$(dirname "$real")" "/rootfs$(dirname "$lib")"; \
       cp -a "$real" "/rootfs$real"; \
-      [ "$lib" = "$real" ] || ln -sf "$(basename "$real")" "/rootfs$lib"; \
+      [ "$lib" = "$real" ] || ln -sf "$real" "/rootfs$lib"; \
+    done; \
+    # Anything outside /usr and /var would replace the distroless base's
+    # merged-/usr symlinks (/lib -> usr/lib, /bin -> usr/bin) on COPY.
+    for d in /rootfs/*; do \
+      case "$d" in /rootfs/usr|/rootfs/var) ;; *) echo "unexpected top-level path in overlay: $d" >&2; exit 1 ;; esac; \
     done; \
     pkgs="$(for f in $bins $helpers $libs; do dpkg -S "$(readlink -f "$f")" 2>/dev/null || dpkg -S "$f" 2>/dev/null || true; done \
             | cut -d: -f1 | tr ',' '\n' | tr -d ' ' | sort -u)"; \
