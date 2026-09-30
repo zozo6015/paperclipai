@@ -37,17 +37,36 @@ deploy/tekton/overlays/zolab             reference webhook exposure
 
 ## Architecture
 
-```
-            ┌──────────────── namespace: paperclip (PSS restricted) ────────────────┐
- Gateway ──►│ HTTPRoute ─► Service :80 ─► Deployment paperclip (1 replica, :3100)    │
- / Ingress  │                               │   PVC paperclip-data → /paperclip       │
-            │                               └─► CNPG Cluster paperclip-db (:5432)     │
-            └────────────────────────────────────────────────────────────────────────┘
+### Runtime
 
- git push ─► Tekton EventListener ─► PipelineRun: build (BuildKit) ─► scan (Trivy) ─► tag
-                                                   │ push sha-<commit>          latest / vX.Y.Z
-                                                   ▼
-                                       ghcr.io/zozo6015/paperclipai
+```mermaid
+flowchart LR
+    user([Browser]) --> gw["Gateway / Ingress"]
+    subgraph ns["namespace: paperclip (Pod Security: restricted)"]
+        route["HTTPRoute"] --> svc["Service paperclip :80"]
+        svc --> app["Deployment paperclip<br/>1 replica, :3100"]
+        app --> pvc[("PVC paperclip-data<br/>/paperclip")]
+        app -->|"DATABASE_URL"| db[("CNPG Cluster paperclip-db<br/>:5432")]
+        sec["Secrets<br/>paperclip-secrets<br/>paperclip-db-app"] -.-> app
+    end
+    gw --> route
+    app -->|"HTTPS / SSH egress"| ext["LLM APIs, git remotes, npm"]
+```
+
+### CI (Tekton)
+
+```mermaid
+flowchart LR
+    push(["git push: main or tag v*"]) -->|"webhook"| el
+    subgraph pipe["namespace: paperclip-ci"]
+        el["EventListener<br/>signature check + filter"] --> pr["PipelineRun paperclip-image"]
+        pr --> build["build<br/>rootless BuildKit"]
+        build --> scan["scan<br/>Trivy"]
+        scan -->|"no fixable HIGH/CRITICAL"| promote["promote<br/>crane tag"]
+    end
+    build -->|"push sha-&lt;commit&gt;<br/>+ SBOM, provenance"| ghcr[("ghcr.io/zozo6015/paperclipai")]
+    promote -->|"tag latest or vX.Y.Z"| ghcr
+    ghcr -.->|"scan pulls by digest"| scan
 ```
 
 - **Server:** one replica using the `Recreate` update strategy. Paperclip runs
@@ -62,6 +81,16 @@ deploy/tekton/overlays/zolab             reference webhook exposure
 ## The image
 
 Built in stages:
+
+```mermaid
+flowchart LR
+    src["source<br/>upstream @ PAPERCLIP_REF"] --> build["build<br/>pnpm + Rust"]
+    build --> prune["prune<br/>prod deps + tsx"]
+    tools["tools<br/>git, sh, tar, ps, ssh, tini, npm"]
+    base[("distroless<br/>nodejs24-debian13:nonroot")] --> runtime
+    prune --> runtime["runtime"]
+    tools --> runtime
+```
 
 1. **source**: upstream Paperclip fetched at `PAPERCLIP_REF` (no `.git`).
 2. **build**: pnpm install, then UI, plugin SDK and server builds, plus the
