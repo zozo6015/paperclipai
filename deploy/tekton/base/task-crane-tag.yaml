@@ -12,6 +12,9 @@ spec:
     - name: version-tag
       default: ""
       description: Optional extra tag, e.g. the Paperclip version in the image
+    - name: platforms
+      default: linux/amd64,linux/arm64
+      description: Platforms the image index must contain before it is tagged
   workspaces:
     - name: dockerconfig
       readOnly: true
@@ -38,6 +41,17 @@ spec:
       script: |
         #!/busybox/sh
         set -eu
+        # Refuse to promote an image that lacks a requested platform (e.g. an
+        # amd64-only build from an outdated Pipeline on the cluster).
+        index="$(crane manifest "$(params.image)@$(params.digest)" | tr -d ' \n')"
+        for p in $(echo "$(params.platforms)" | tr ',' ' '); do
+          arch="${p#*/}"
+          echo "$index" | grep -q "\"architecture\":\"$arch\"" || {
+            echo "image $(params.image)@$(params.digest) has no $p manifest; not tagging" >&2
+            exit 1
+          }
+          echo "has $p"
+        done
         for t in "$@" "$(params.version-tag)"; do
           [ -n "$t" ] || continue
           crane tag "$(params.image)@$(params.digest)" "$t"
