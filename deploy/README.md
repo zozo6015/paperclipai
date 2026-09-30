@@ -78,14 +78,20 @@ Cluster facts used by the overlay: Cilium Gateway API with Gateway `eg` in
 `kube-system`, CloudNativePG, `synology-iscsi` for ReadWriteOnce volumes
 (`nfs-isolated` is the RWX class; nothing here currently needs RWX).
 
-1. Replace both `CHANGE-ME.paperclip.hostname` values in
-   `deploy/kubernetes/overlays/zolab/kustomization.yaml` with Paperclip's
-   hostname.
-2. Make sure the `eg` listener serving that hostname has TLS and
+The CNPG operator runs in `cnpg-system`. Paperclip is private (not reachable
+from the internet), hence `PAPERCLIP_DEPLOYMENT_EXPOSURE=private`.
+
+Hostnames are kept out of this public repository. They live in a git-ignored
+`hostnames.env` next to each zolab overlay and are injected at build time:
+
+```sh
+cp deploy/kubernetes/overlays/zolab/hostnames.env.example \
+   deploy/kubernetes/overlays/zolab/hostnames.env   # then edit
+```
+
+1. Make sure the `eg` listener serving that hostname has TLS and
    `allowedRoutes` that admit the `paperclip` namespace.
-3. If the CNPG operator is not in `cnpg-system`, fix the namespaceSelector in
-   `components/cloudnativepg/networkpolicy.yaml`.
-4. Create the secrets above, then:
+2. Create the secrets above, then:
 
 ```sh
 kubectl apply -k deploy/kubernetes/overlays/zolab
@@ -143,9 +149,11 @@ keep that namespace for builds only.
      --from-literal=secretToken="$(openssl rand -hex 32)"
    ```
 
-2. Apply: `kubectl apply -k deploy/tekton/overlays/zolab`
+2. Copy `deploy/tekton/overlays/zolab/hostnames.env.example` to
+   `hostnames.env` (git-ignored), set the webhook hostname, then apply:
+   `kubectl apply -k deploy/tekton/overlays/zolab`
 3. In GitHub (repository → Settings → Webhooks): payload URL
-   `https://zozotk.go.ro/`, content type `application/json`, the secret from
+   `https://<webhook hostname>/`, content type `application/json`, the secret from
    step 1, event "Just the push event".
 4. Manual run without a push:
 

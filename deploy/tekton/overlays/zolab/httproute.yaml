@@ -8,7 +8,7 @@ spec:
     - name: eg
       namespace: kube-system
   hostnames:
-    - zozotk.go.ro
+    - webhook.example.com # set via hostnames.env
   rules:
     - matches:
         - path:

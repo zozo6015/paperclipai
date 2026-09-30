@@ -4,7 +4,9 @@ kind: Kustomization
 # zolab: Cilium Gateway API (Gateway `eg` in kube-system), CloudNativePG,
 # Synology iSCSI block storage for ReadWriteOnce volumes.
 #
-# Before applying, set PAPERCLIP_HOSTNAME below (search for CHANGE-ME).
+# Hostnames are deliberately not committed (public repo). Copy
+# hostnames.env.example to hostnames.env (git-ignored) and fill it in;
+# `kustomize build` fails until it exists.
 resources:
   - ../../base
   - ciliumnetworkpolicy.yaml
@@ -18,6 +20,39 @@ images:
   - name: paperclip
     newName: ghcr.io/zozo6015/paperclipai
     newTag: latest # pin to a sha-<commit> tag or digest produced by Tekton
+
+# Local-only values, injected below; the local-config annotation keeps this
+# ConfigMap out of the rendered output.
+configMapGenerator:
+  - name: zolab-hostnames
+    envs:
+      - hostnames.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: zolab-hostnames
+      fieldPath: data.PAPERCLIP_HOSTNAME
+    targets:
+      - select:
+          kind: HTTPRoute
+          name: paperclip
+        fieldPaths:
+          - spec.hostnames.0
+  - source:
+      kind: ConfigMap
+      name: zolab-hostnames
+      fieldPath: data.PAPERCLIP_PUBLIC_URL
+    targets:
+      - select:
+          kind: ConfigMap
+          name: paperclip-config
+        fieldPaths:
+          - data.PAPERCLIP_PUBLIC_URL
 
 patches:
   # ReadWriteOnce volumes -> synology-iscsi. (Nothing here needs
@@ -48,18 +83,6 @@ patches:
         value:
           - name: eg
             namespace: kube-system
-      - op: replace
-        path: /spec/hostnames
-        value:
-          - CHANGE-ME.paperclip.hostname
-
-  - target:
-      kind: ConfigMap
-      name: paperclip-config
-    patch: |-
-      - op: replace
-        path: /data/PAPERCLIP_PUBLIC_URL
-        value: https://CHANGE-ME.paperclip.hostname
 
   # Ingress to the server is admitted only from the Cilium Gateway (see
   # ciliumnetworkpolicy.yaml); drop the base "any source" rule.

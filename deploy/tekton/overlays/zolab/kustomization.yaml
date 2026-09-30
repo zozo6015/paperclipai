@@ -1,9 +1,35 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# zolab: GitHub webhook reaches the EventListener through the Cilium
-# Gateway `eg` (kube-system) at https://zozotk.go.ro/.
+# zolab: the GitHub webhook reaches the EventListener through the Cilium
+# Gateway `eg` (kube-system).
+#
+# The webhook hostname is deliberately not committed (public repo). Copy
+# hostnames.env.example to hostnames.env (git-ignored) and fill it in;
+# `kustomize build` fails until it exists.
 resources:
   - ../../base
   - httproute.yaml
   - networkpolicy.yaml
+
+configMapGenerator:
+  - name: zolab-hostnames
+    namespace: paperclip-ci
+    envs:
+      - hostnames.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: zolab-hostnames
+      fieldPath: data.WEBHOOK_HOSTNAME
+    targets:
+      - select:
+          kind: HTTPRoute
+          name: paperclip-github-webhook
+        fieldPaths:
+          - spec.hostnames.0
