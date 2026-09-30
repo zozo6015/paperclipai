@@ -3,6 +3,7 @@
   "private": true,
   "description": "Pins the Paperclip server release baked into the image. Upgrade: see deploy/README.md.",
   "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.286",
     "@paperclipai/server": "2026.916.1"
   }
 }

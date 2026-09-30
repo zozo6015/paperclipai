@@ -102,22 +102,23 @@ flowchart LR
    whole dependency tree with the committed lockfile, and fetches the target
    platform's prebuilt native packages via `npm install --os/--cpu` without
    running install scripts. Nothing is compiled.
-2. **tools**: `git`, `sh` (dash), `tar`, `ps`, `ssh`, `tini` and `npm`, with
-   only the shared libraries the distroless base lacks.
+2. **tools**: `git`, `sh` (dash), `bash`, `tar`, `ps`, `ssh`, `tini` and
+   `npm`, with only the shared libraries the distroless base lacks.
 3. **runtime**: the distroless base, plus the tools, plus the app. A smoke test
    checks that every copied tool starts.
 
 Why it is not *pure* distroless: the Paperclip server itself runs `git`,
 `tar` and `sh` (workspace clones, sandbox payloads) and `npm` (plugin
-installs). Everything else a normal Debian image has is absent: there is no
-package manager, no compilers and no coding-agent CLIs. Package metadata for
+installs), and its `claude_local` adapter runs the Claude Code CLI, which
+needs `bash`. Everything else a normal Debian image has is absent: there is
+no package manager and there are no compilers. Package metadata for
 the copied tools is kept, so image scanners still report their CVEs.
 
 **Limitations:**
-- The image contains what the npm package installs. Unlike upstream's own
-  Docker image, it does not add agent CLIs (Claude Code, Codex, Gemini, …) to
-  `PATH`, so adapters that expect one there will not find it. Run agents in
-  sandbox pods (see
+- Of the local agent CLIs, only Claude Code (`claude`) is included. Unlike
+  upstream's own Docker image, it does not add Codex, Gemini, … to `PATH`,
+  so those adapters will not find their CLI. Run such agents in sandbox pods
+  (see
   [`kubernetes-sandbox`](deploy/kubernetes/components/kubernetes-sandbox)) or
   through remote/gateway adapters.
 - Upstream publishes the bundled `paperclip-runnerd` binary for x86-64 only.
@@ -211,6 +212,7 @@ them from an overlay.
 | `DATABASE_URL` | Secret `paperclip-db-app` / `uri` | PostgreSQL connection string |
 | `BETTER_AUTH_SECRET` | Secret `paperclip-secrets` | Session/auth signing secret |
 | `PAPERCLIP_SECRETS_MASTER_KEY` | Secret `paperclip-secrets` | Encryption key for stored secrets |
+| `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | Secret `paperclip-secrets` (optional) | Claude Code credentials for `claude_local` agents |
 
 See upstream
 [`docs/deploy/environment-variables.md`](https://github.com/paperclipai/paperclip/blob/master/docs/deploy/environment-variables.md)
@@ -251,6 +253,9 @@ that namespace for builds only.
    cd docker
    npm install --package-lock-only --save-exact --no-audit --no-fund @paperclipai/server@<version>
    ```
+
+   Claude Code is upgraded the same way, with
+   `@anthropic-ai/claude-code@<version>` (`npm view @anthropic-ai/claude-code version`).
 3. Set `newTag: sha-<commit>` in your overlay and `kubectl apply -k …`.
    Migrations run automatically on start. Back up the database first.
 

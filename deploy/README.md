@@ -32,10 +32,14 @@ Paperclip server itself executes `git`, `tar` and `sh` (workspace clones in
 the heartbeat loop, sandbox payload packaging) and `npm` (plugin installs).
 Those binaries and only the shared libraries missing from the distroless base
 are copied in, with dpkg metadata so scanners still see them. No package
-manager, compiler or coding-agent CLI (claude, codex, …) is included.
+manager or compiler is included.
 
-Consequence: local agent adapters that shell out to a CLI inside the server
-container do not work with this image. Run agents in sandboxes (the
+The Claude Code CLI (`claude`, pinned in `docker/package.json`) is included
+for the `claude_local` adapter, together with `bash`, which its Bash tool
+requires. The adapter starts `claude` as a child process in the server
+container, with the agent workspace as its working directory, so it has to be
+in the same image; a sidecar container cannot serve it. Other local CLIs
+(codex, gemini, …) are not included: run those agents in sandboxes (the
 `kubernetes-sandbox` component + upstream plugin) or through remote adapters.
 
 Build locally:
@@ -62,6 +66,18 @@ kubectl -n paperclip create secret generic paperclip-secrets \
   --from-literal=BETTER_AUTH_SECRET="$(openssl rand -base64 48)" \
   --from-literal=PAPERCLIP_SECRETS_MASTER_KEY="$(openssl rand -base64 32)" \
   --from-literal=PAPERCLIP_AGENT_JWT_SECRET="$(openssl rand -base64 48)"
+```
+
+For `claude_local` agents, add one Claude Code credential to the same Secret:
+`ANTHROPIC_API_KEY` (API billing) or `CLAUDE_CODE_OAUTH_TOKEN` (a Claude
+subscription; create it with `claude setup-token` on a machine with a
+browser). Both keys are optional, and the pod needs a restart to pick up a
+change:
+
+```sh
+kubectl -n paperclip patch secret paperclip-secrets --type merge \
+  -p '{"stringData":{"CLAUDE_CODE_OAUTH_TOKEN":"<token>"}}'
+kubectl -n paperclip rollout restart deployment/paperclip
 ```
 
 Back up `PAPERCLIP_SECRETS_MASTER_KEY`: it encrypts the company secrets stored
