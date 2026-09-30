@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: paperclip-eventlistener
+  namespace: paperclip-ci
+---
+# Bindings to the ClusterRoles shipped with Tekton Triggers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: paperclip-eventlistener
+  namespace: paperclip-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-eventlistener-roles
+subjects:
+  - kind: ServiceAccount
+    name: paperclip-eventlistener
+    namespace: paperclip-ci
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: paperclip-ci-eventlistener
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-eventlistener-clusterroles
+subjects:
+  - kind: ServiceAccount
+    name: paperclip-eventlistener
+    namespace: paperclip-ci
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: paperclip-github
+  namespace: paperclip-ci
+spec:
+  serviceAccountName: paperclip-eventlistener
+  # Picks up the standalone Trigger(s) in this namespace.
+  labelSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: paperclip-ci
+  resources:
+    kubernetesResource:
+      spec:
+        template:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    memory: 256Mi

@@ -8,8 +8,9 @@ deploy/kubernetes/components/
   gateway-api                          HTTPRoute on an existing Gateway
   kubernetes-sandbox                   OPTIONAL RBAC for agent sandboxes (see below)
 deploy/kubernetes/overlays/zolab       the zolab cluster
-deploy/tekton/base                     Tekton pipeline + GitHub webhook trigger
-deploy/tekton/overlays/zolab           webhook exposure on zolab
+deploy/tekton/base                     Tekton pipeline + standalone GitHub Trigger
+deploy/tekton/components/eventlistener OPTIONAL dedicated EventListener
+deploy/tekton/overlays/zolab           zolab (shares an existing EventListener)
 ```
 
 Images are published to `ghcr.io/zozo6015/paperclipai` by Tekton only; no
@@ -82,7 +83,7 @@ The CNPG operator runs in `cnpg-system`. Paperclip is private (not reachable
 from the internet), hence `PAPERCLIP_DEPLOYMENT_EXPOSURE=private`.
 
 Hostnames are kept out of this public repository. They live in a git-ignored
-`hostnames.env` next to each zolab overlay and are injected at build time:
+`hostnames.env` next to the zolab Kubernetes overlay and are injected at build time:
 
 ```sh
 cp deploy/kubernetes/overlays/zolab/hostnames.env.example \
@@ -123,7 +124,7 @@ namespaces, because the provider creates one namespace per company at run time.
 Agent pods call back to the server, so also allow ingress to port 3100 from
 the `paperclip-*` tenant namespaces.
 
-## Tekton CI (zolab)
+## Tekton CI
 
 Needs Tekton Pipelines and Tekton Triggers (with core interceptors) installed.
 
@@ -138,23 +139,64 @@ rootless BuildKit needs `Unconfined` seccomp/AppArmor to create user
 namespaces. The build still runs as UID 1000 with no added capabilities;
 keep that namespace for builds only.
 
+The webhook logic is a standalone `Trigger` (`paperclip-github-push`) in
+`paperclip-ci`. It validates the GitHub signature with *its own* secret,
+filters for `main` / `v*` pushes, and creates PipelineRuns in `paperclip-ci`
+as ServiceAccount `paperclip-triggers`, which may only create PipelineRuns
+there. Serve it with one of two EventListener options (below).
+
 1. Secrets:
 
    ```sh
    kubectl create namespace paperclip-ci --dry-run=client -o yaml | kubectl apply -f -
    # GitHub PAT (classic) with write:packages, or a fine-grained token with packages write
    kubectl -n paperclip-ci create secret docker-registry ghcr-credentials \
-     --docker-server=ghcr.io --docker-username=zozo6015 --docker-password='<token>'
+     --docker-server=ghcr.io --docker-username=<github user> --docker-password='<token>'
    kubectl -n paperclip-ci create secret generic github-webhook-secret \
      --from-literal=secretToken="$(openssl rand -hex 32)"
    ```
 
-2. Copy `deploy/tekton/overlays/zolab/hostnames.env.example` to
-   `hostnames.env` (git-ignored), set the webhook hostname, then apply:
-   `kubectl apply -k deploy/tekton/overlays/zolab`
-3. In GitHub (repository → Settings → Webhooks): payload URL
-   `https://<webhook hostname>/`, content type `application/json`, the secret from
-   step 1, event "Just the push event".
+2. Pick an EventListener option and apply your overlay
+   (`kubectl apply -k deploy/tekton/overlays/<your overlay>`):
+
+   **Option A: dedicated EventListener.** Add
+   `../../components/eventlistener` to the overlay's `components`, then expose
+   Service `el-paperclip-github` (port 8080) with your own Ingress/HTTPRoute.
+
+   **Option B: share an EventListener you already run.** Use the base alone
+   (as `overlays/zolab` does). Then, on the existing listener
+   (`<el-namespace>/<el-name>`):
+
+   ```sh
+   # Inspect first: note its ServiceAccount and any namespaceSelector / labelSelector.
+   kubectl -n <el-namespace> get eventlistener <el-name> \
+     -o jsonpath='{.spec.serviceAccountName}{"\n"}{.spec.namespaceSelector}{"\n"}{.spec.labelSelector}{"\n"}'
+
+   # Also watch Triggers in paperclip-ci. Keep the listener's own namespace
+   # and any names already listed: a merge patch replaces the whole array.
+   kubectl -n <el-namespace> patch eventlistener <el-name> --type merge \
+     -p '{"spec":{"namespaceSelector":{"matchNames":["<el-namespace>","paperclip-ci"]}}}'
+
+   # Tekton requires this ClusterRoleBinding for listeners using namespaceSelector.
+   SA="$(kubectl -n <el-namespace> get eventlistener <el-name> -o jsonpath='{.spec.serviceAccountName}')"
+   kubectl create clusterrolebinding <el-name>-eventlistener-namespaces \
+     --clusterrole=tekton-triggers-eventlistener-roles \
+     --serviceaccount="<el-namespace>:${SA}"
+   ```
+
+   Caveats:
+   - If the listener is managed from git, make the change there, or it will
+     be reverted.
+   - If it has a `labelSelector`, give the Trigger matching labels.
+   - The ClusterRoleBinding lets that listener read Tekton Triggers, create
+     PipelineRuns and impersonate ServiceAccounts in every namespace. This is
+     the grant upstream Tekton documents for this mode.
+   - Webhooks from other repositories share the URL. The Paperclip Trigger
+     ignores them (wrong signature), but the listener's existing triggers
+     ignore Paperclip's pushes only if they validate their own webhook secret.
+
+3. In GitHub (repository → Settings → Webhooks): the listener's URL, content
+   type `application/json`, the secret from step 1, event "Just the push event".
 4. Manual run without a push:
 
    ```sh
