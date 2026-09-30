@@ -13,6 +13,7 @@ Kubernetes cluster.
 |---|---|
 | Image | `ghcr.io/zozo6015/paperclipai` |
 | Runtime base | `gcr.io/distroless/nodejs24-debian13:nonroot` (UID 65532) |
+| Platforms | `linux/amd64`, `linux/arm64` (e.g. Raspberry Pi 4/5 with a 64-bit OS) |
 | Upstream version | commit pinned in `ARG PAPERCLIP_REF` in [`docker/Dockerfile`](docker/Dockerfile) |
 | Deployment | Kustomize base + components + overlays |
 | CI | Tekton (rootless BuildKit, Trivy); no GitHub Actions |
@@ -124,6 +125,13 @@ docker buildx build -f docker/Dockerfile -t paperclip:dev .
 # a different upstream commit
 docker buildx build -f docker/Dockerfile \
   --build-arg PAPERCLIP_REF=<upstream commit sha> -t paperclip:dev .
+```
+
+Multi-arch locally (non-native platforms run under QEMU emulation):
+
+```sh
+docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
+  -t <registry>/paperclip:dev --push .
 ```
 
 The build needs network access to GitHub, the npm registry, crates.io,

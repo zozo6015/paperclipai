@@ -49,8 +49,16 @@ spec:
             value: $(tt.params.git-revision)
           - name: release-tags
             value: ["$(tt.params.release-tag)"]
+        # Emulated (QEMU) arm64 builds are several times slower than native.
         timeouts:
-          pipeline: 2h0m0s
+          pipeline: 6h0m0s
+        # The BuildKit image bundles QEMU emulators for arm64 and others but
+        # not for amd64, so the multi-platform build must run on amd64 nodes.
+        taskRunSpecs:
+          - pipelineTaskName: build
+            podTemplate:
+              nodeSelector:
+                kubernetes.io/arch: amd64
         taskRunTemplate:
           serviceAccountName: paperclip-build
           podTemplate:

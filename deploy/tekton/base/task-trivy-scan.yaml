@@ -3,10 +3,15 @@ kind: Task
 metadata:
   name: trivy-scan
 spec:
-  description: Fails when the image has fixable vulnerabilities at the given severities.
+  description: >-
+    Fails when any platform of the image has fixable vulnerabilities at the
+    given severities.
   params:
     - name: image-ref
       description: Image reference, preferably by digest (repo@sha256:...)
+    - name: platforms
+      default: linux/amd64
+      description: Comma-separated platforms to scan (each one separately)
     - name: severity
       default: CRITICAL,HIGH
   workspaces:
@@ -44,11 +49,12 @@ spec:
       volumeMounts:
         - name: tmp
           mountPath: /tmp
-      args:
-        - image
-        - --no-progress
-        - --exit-code=1
-        - --ignore-unfixed
-        - --scanners=vuln,secret
-        - --severity=$(params.severity)
-        - $(params.image-ref)
+      script: |
+        #!/bin/sh
+        set -eu
+        for platform in $(echo "$(params.platforms)" | tr ',' ' '); do
+          echo "=== scanning $(params.image-ref) for $platform"
+          trivy image --no-progress --exit-code=1 --ignore-unfixed \
+            --scanners=vuln,secret --severity="$(params.severity)" \
+            --platform="$platform" "$(params.image-ref)"
+        done

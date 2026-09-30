@@ -157,13 +157,7 @@ RUN set -eux; \
       name="${p%%:*}"; \
       [ -e "/distroless/var/lib/dpkg/status.d/$name" ] && continue; \
       dpkg-query -s "$p" > "/rootfs/var/lib/dpkg/status.d/$name"; \
-    done; \
-    # Smoke-test the overlay inside a chroot of distroless + overlay.
-    mkdir -p /check && cp -a /distroless/. /check/ && cp -a /rootfs/. /check/; \
-    chroot /check /usr/bin/sh -c 'git --version && tar --version | head -1 && ps --version && ssh -V && tini --version && node --version && npm --version'; \
-    # Prints its usage (and exits non-zero) only if all its libraries resolve.
-    { chroot /check /usr/lib/git-core/git-remote-https 2>&1 || true; } | grep -q 'remote-curl'; \
-    rm -rf /check
+    done
 
 # -----------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS runtime
@@ -197,6 +191,12 @@ ENV NODE_ENV=production \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_CACHE=/tmp/.npm \
     PATH=/nodejs/bin:/usr/local/bin:/usr/bin
+
+# Smoke-test the tool overlay in the real final filesystem (also under QEMU
+# emulation for foreign platforms): every binary must start, i.e. all its
+# shared libraries resolve. git-remote-https prints its usage and exits
+# non-zero when it starts correctly. Adds only an empty layer.
+RUN ["/usr/bin/sh", "-c", "set -e; git --version; tar --version >/dev/null; ps --version; ssh -V; tini --version; node --version; npm --version >/dev/null; out=\"$(/usr/lib/git-core/git-remote-https 2>&1 || true)\"; case \"$out\" in *remote-curl*) ;; *) echo \"$out\" >&2; exit 1 ;; esac"]
 
 WORKDIR /app
 USER 65532:65532

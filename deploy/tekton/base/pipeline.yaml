@@ -15,7 +15,11 @@ spec:
     - name: image
       default: ghcr.io/zozo6015/paperclipai
     - name: platforms
-      default: linux/amd64
+      default: linux/amd64,linux/arm64
+      description: >-
+        Comma-separated target platforms. Non-native ones are built under the
+        QEMU user emulators bundled in the BuildKit image (amd64 -> arm64 etc.;
+        there is no bundled amd64 emulator, so run the build on amd64 nodes).
     - name: release-tags
       type: array
       default: []
@@ -57,6 +61,8 @@ spec:
       params:
         - name: image-ref
           value: $(tasks.build.results.IMAGE_URL)
+        - name: platforms
+          value: $(params.platforms)
         - name: severity
           value: $(params.scan-severity)
       workspaces:
