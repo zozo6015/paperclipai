@@ -4,6 +4,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: paperclip-server-from-gateway
+  namespace: paperclip
 spec:
   endpointSelector:
     matchLabels:

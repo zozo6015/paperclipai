@@ -7,6 +7,10 @@ kind: Kustomization
 # Hostnames are deliberately not committed (public repo). Copy
 # hostnames.env.example to hostnames.env (git-ignored) and fill it in;
 # `kustomize build` fails until it exists.
+# Applies to the components below as well: a base's `namespace` does not
+# reach resources added by components in an overlay.
+namespace: paperclip
+
 resources:
   - ../../base
   - ciliumnetworkpolicy.yaml

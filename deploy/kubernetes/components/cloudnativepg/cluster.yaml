@@ -2,6 +2,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: paperclip-db
+  namespace: paperclip
 spec:
   # One primary + one streaming replica. The PostgreSQL image is left to the
   # installed operator's default; pin spec.imageName in an overlay if needed.
