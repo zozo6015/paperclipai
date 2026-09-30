@@ -18,12 +18,14 @@ GitHub Actions are involved.
 
 ## The image
 
-`docker/Dockerfile` fetches upstream
-[paperclipai/paperclip](https://github.com/paperclipai/paperclip) at the
-commit pinned in `ARG PAPERCLIP_REF`, builds it (pnpm + Rust for the vendored
-`paperclip-runnerd`), prunes devDependencies and ships the result on
-`gcr.io/distroless/nodejs24-debian13:nonroot` (UID 65532). All base images are
-pinned by digest.
+`docker/Dockerfile` installs the published npm release of
+[Paperclip](https://github.com/paperclipai/paperclip) (`@paperclipai/server`,
+pinned with its whole dependency tree by `docker/package.json` and
+`docker/package-lock.json`) and ships it on
+`gcr.io/distroless/nodejs24-debian13:nonroot` (UID 65532). Nothing is
+compiled: the install runs on the build machine's own architecture and fetches
+the target platform's prebuilt native packages. All base images are pinned by
+digest.
 
 It is *distroless plus a minimal tool overlay*, not pure distroless: the
 Paperclip server itself executes `git`, `tar` and `sh` (workspace clones in
@@ -41,7 +43,6 @@ Build locally:
 ```sh
 docker buildx build -f docker/Dockerfile -t paperclip:dev .
 # another upstream commit:
-docker buildx build -f docker/Dockerfile --build-arg PAPERCLIP_REF=<sha> -t paperclip:dev .
 ```
 
 ## Kubernetes
@@ -59,7 +60,8 @@ ReadWriteOnce volume).
 kubectl create namespace paperclip --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n paperclip create secret generic paperclip-secrets \
   --from-literal=BETTER_AUTH_SECRET="$(openssl rand -base64 48)" \
-  --from-literal=PAPERCLIP_SECRETS_MASTER_KEY="$(openssl rand -base64 32)"
+  --from-literal=PAPERCLIP_SECRETS_MASTER_KEY="$(openssl rand -base64 32)" \
+  --from-literal=PAPERCLIP_AGENT_JWT_SECRET="$(openssl rand -base64 48)"
 ```
 
 Back up `PAPERCLIP_SECRETS_MASTER_KEY`: it encrypts the company secrets stored
@@ -114,10 +116,11 @@ is Cilium-specific.
 ### Agent sandboxes (optional)
 
 Enable `../../components/kubernetes-sandbox` in the overlay. The plugin is
-prebuilt in the image at `/app/packages/plugins/sandbox-providers/kubernetes`;
-install it as a local plugin from that path (the `paperclipai plugin install
---local <path>` CLI talks to the server's authenticated `/api/plugins/install`
-endpoint, so run it from a machine logged in to your instance), then create a `kubernetes` sandbox environment with `inCluster: true` (see
+published on npm as `@paperclipai/plugin-kubernetes`. Install it with
+`paperclipai plugin install @paperclipai/plugin-kubernetes`, run from a machine
+logged in to your instance: the CLI calls the server's authenticated
+`/api/plugins/install` endpoint, and the server installs it with the image's
+`npm`. Then create a `kubernetes` sandbox environment with `inCluster: true` (see
 upstream `packages/plugins/sandbox-providers/kubernetes/README.md`). The
 component grants a ClusterRole that includes Secrets and `pods/exec` in all
 namespaces, because the provider creates one namespace per company at run time.
@@ -133,6 +136,14 @@ commit with SBOM and provenance attestations and a registry cache, then pushes
 `sha-<commit>`. Trivy fails the run on fixable HIGH/CRITICAL findings, and
 only a clean image is tagged `latest` (push to `main`) or `vX.Y.Z` (push of a
 `v*` tag).
+
+Images are multi-arch (`linux/amd64,linux/arm64`, pipeline parameter
+`platforms`). The build node's own architecture builds natively; the other one
+runs under the QEMU user emulators bundled in the BuildKit image (the amd64
+image emulates arm64 and vice versa), so nodes need no binfmt/QEMU setup and
+the build can run on either architecture. Only the small `tools` stage and the
+image smoke test run emulated. The heavy `npm install` always runs natively.
+Trivy scans every platform.
 
 The `paperclip-ci` namespace is labelled Pod Security `privileged` because
 rootless BuildKit needs `Unconfined` seccomp/AppArmor to create user
@@ -211,6 +222,7 @@ there. Serve it with one of two EventListener options (below).
        - {name: git-url, value: https://github.com/zozo6015/paperclipai.git}
        - {name: git-revision, value: <commit sha>}
        - {name: release-tags, value: [latest]}
+     timeouts: {pipeline: 2h0m0s}
      taskRunTemplate: {serviceAccountName: paperclip-build}
      workspaces:
        - name: dockerconfig

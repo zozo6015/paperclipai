@@ -13,12 +13,15 @@ Kubernetes cluster.
 |---|---|
 | Image | `ghcr.io/zozo6015/paperclipai` |
 | Runtime base | `gcr.io/distroless/nodejs24-debian13:nonroot` (UID 65532) |
-| Upstream version | commit pinned in `ARG PAPERCLIP_REF` in [`docker/Dockerfile`](docker/Dockerfile) |
+| Platforms | `linux/amd64`, `linux/arm64` (e.g. Raspberry Pi 4/5 with a 64-bit OS) |
+| Upstream version | npm release of `@paperclipai/server` pinned in [`docker/package.json`](docker/package.json) + lockfile |
 | Deployment | Kustomize base + components + overlays |
 | CI | Tekton (rootless BuildKit, Trivy); no GitHub Actions |
 
-> **Status:** the image has not yet completed an end-to-end build; the first
-> Tekton run is its first full build. The Kustomize output is schema-validated.
+> **Status:** the npm-based image has been started locally against PostgreSQL
+> (health, UI, migrations) and its arm64 native modules were load-tested; its
+> first full Tekton build is still pending. The Kustomize output is
+> schema-validated.
 
 ## Contents
 
@@ -86,23 +89,23 @@ Built in stages:
 
 ```mermaid
 flowchart LR
-    src["source<br/>upstream @ PAPERCLIP_REF"] --> build["build<br/>pnpm + Rust"]
-    build --> prune["prune<br/>prod deps + tsx"]
+    lock["docker/package.json<br/>+ package-lock.json"] --> install["install<br/>npm, build platform,<br/>target --os/--cpu"]
     tools["tools<br/>git, sh, tar, ps, ssh, tini, npm"]
     base[("distroless<br/>nodejs24-debian13:nonroot")] --> runtime
-    prune --> runtime["runtime"]
+    install --> runtime["runtime"]
     tools --> runtime
 ```
 
-1. **source**: upstream Paperclip fetched at `PAPERCLIP_REF` (no `.git`).
-2. **build**: pnpm install, then UI, plugin SDK and server builds, plus the
-   Rust `paperclip-runnerd` binary the server vendors. It also prebuilds the
-   Kubernetes sandbox-provider plugin.
-3. **prune**: devDependencies removed; `tsx` (the runtime loader) installed in
-   isolation.
-4. **tools**: `git`, `sh` (dash), `tar`, `ps`, `ssh`, `tini` and `npm`, with
-   only the shared libraries the distroless base lacks, and a chroot smoke test.
-5. **runtime**: the distroless base, plus the tools, plus the app.
+1. **install**: runs on the *build* machine's own architecture and is never
+   emulated. It installs the published, prebuilt `@paperclipai/server`
+   release, the same package the upstream quickstart installs. It pins the
+   whole dependency tree with the committed lockfile, and fetches the target
+   platform's prebuilt native packages via `npm install --os/--cpu` without
+   running install scripts. Nothing is compiled.
+2. **tools**: `git`, `sh` (dash), `tar`, `ps`, `ssh`, `tini` and `npm`, with
+   only the shared libraries the distroless base lacks.
+3. **runtime**: the distroless base, plus the tools, plus the app. A smoke test
+   checks that every copied tool starts.
 
 Why it is not *pure* distroless: the Paperclip server itself runs `git`,
 `tar` and `sh` (workspace clones, sandbox payloads) and `npm` (plugin
@@ -110,25 +113,34 @@ installs). Everything else a normal Debian image has is absent: there is no
 package manager, no compilers and no coding-agent CLIs. Package metadata for
 the copied tools is kept, so image scanners still report their CVEs.
 
-**Limitation:** because no agent CLIs (Claude Code, Codex, Gemini, …) are
-included, adapters that run a CLI *inside the Paperclip container* do not work.
-Run agents in sandbox pods (see
-[`kubernetes-sandbox`](deploy/kubernetes/components/kubernetes-sandbox)) or
-through remote/gateway adapters.
+**Limitations:**
+- The image contains what the npm package installs. Unlike upstream's own
+  Docker image, it does not add agent CLIs (Claude Code, Codex, Gemini, …) to
+  `PATH`, so adapters that expect one there will not find it. Run agents in
+  sandbox pods (see
+  [`kubernetes-sandbox`](deploy/kubernetes/components/kubernetes-sandbox)) or
+  through remote/gateway adapters.
+- Upstream publishes the bundled `paperclip-runnerd` binary for x86-64 only.
+  On arm64 the experimental native runner (`enableNativeRunner`, off by
+  default) therefore cannot start. Everything else runs natively.
 
 Build locally (Docker with BuildKit):
 
 ```sh
 docker buildx build -f docker/Dockerfile -t paperclip:dev .
-
-# a different upstream commit
-docker buildx build -f docker/Dockerfile \
-  --build-arg PAPERCLIP_REF=<upstream commit sha> -t paperclip:dev .
 ```
 
-The build needs network access to GitHub, the npm registry, crates.io,
-static.rust-lang.org and the Debian mirrors. It is memory-hungry (UI + Rust
-build); the Tekton build step requests 6 GiB and is capped at 12 GiB.
+Multi-arch locally. Only the small `tools` stage and the smoke test run under
+QEMU emulation for the non-native platform:
+
+```sh
+docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
+  -t <registry>/paperclip:dev --push .
+```
+
+The build needs network access to the npm registry and the Debian mirrors,
+and takes a few minutes. The image is about 1.4 GB, mostly the agent SDKs that
+`@paperclipai/server` depends on (Codex, Claude Agent SDK).
 
 ### Image tags
 
@@ -158,7 +170,8 @@ for ReadWriteOnce volumes, and PostgreSQL (the
 kubectl create namespace paperclip
 kubectl -n paperclip create secret generic paperclip-secrets \
   --from-literal=BETTER_AUTH_SECRET="$(openssl rand -base64 48)" \
-  --from-literal=PAPERCLIP_SECRETS_MASTER_KEY="$(openssl rand -base64 32)"
+  --from-literal=PAPERCLIP_SECRETS_MASTER_KEY="$(openssl rand -base64 32)" \
+  --from-literal=PAPERCLIP_AGENT_JWT_SECRET="$(openssl rand -base64 48)"
 
 # 2. An overlay for your cluster (start from overlays/zolab)
 cp -r deploy/kubernetes/overlays/zolab deploy/kubernetes/overlays/mycluster
@@ -229,10 +242,14 @@ that namespace for builds only.
 
 ## Upgrading Paperclip
 
-1. Pick an upstream commit from
-   [paperclipai/paperclip](https://github.com/paperclipai/paperclip/commits).
-2. Update `ARG PAPERCLIP_REF` in `docker/Dockerfile` and push to `main`. Tekton
-   builds, scans and tags the new image.
+1. Pick a release: `npm view @paperclipai/server versions`.
+2. Update the pin and the lockfile (with Node 24 / npm 11), then push to
+   `main`. Tekton builds, scans and tags the new image.
+
+   ```sh
+   cd docker
+   npm install --package-lock-only --save-exact --no-audit --no-fund @paperclipai/server@<version>
+   ```
 3. Set `newTag: sha-<commit>` in your overlay and `kubectl apply -k …`.
    Migrations run automatically on start. Back up the database first.
 

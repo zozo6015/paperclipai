@@ -52,10 +52,10 @@ spec:
           type: Unconfined
       computeResources:
         requests:
-          cpu: "2"
-          memory: 6Gi
+          cpu: "1"
+          memory: 2Gi
         limits:
-          memory: 12Gi
+          memory: 4Gi
       volumeMounts:
         - name: buildkit-state
           mountPath: /home/user/.local/share/buildkit
