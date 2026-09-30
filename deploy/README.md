@@ -135,12 +135,13 @@ only a clean image is tagged `latest` (push to `main`) or `vX.Y.Z` (push of a
 `v*` tag).
 
 Images are multi-arch (`linux/amd64,linux/arm64`, pipeline parameter
-`platforms`). Non-native platforms are built under the QEMU user emulators
-bundled in the BuildKit image, so the nodes need no binfmt/QEMU setup. The
-bundle has no amd64 emulator, which is why the TriggerTemplate pins the build
-task to `kubernetes.io/arch: amd64` nodes. Emulated builds are several times
-slower than native ones, so the pipeline timeout is 6 hours. Trivy scans every
-platform.
+`platforms`). The build node's own architecture builds natively; the other one
+runs under the QEMU user emulators bundled in the BuildKit image (the amd64
+image emulates arm64 and vice versa), so nodes need no binfmt/QEMU setup and
+the build can run on either architecture. Emulation is several times slower
+than native, so the pipeline timeout is 6 hours. Both platforms build in the
+same pod at once, so give the build node enough memory (the step requests
+6 GiB and may use up to 12 GiB). Trivy scans every platform.
 
 The `paperclip-ci` namespace is labelled Pod Security `privileged` because
 rootless BuildKit needs `Unconfined` seccomp/AppArmor to create user
@@ -220,9 +221,6 @@ there. Serve it with one of two EventListener options (below).
        - {name: git-revision, value: <commit sha>}
        - {name: release-tags, value: [latest]}
      timeouts: {pipeline: 6h0m0s}
-     taskRunSpecs:
-       - pipelineTaskName: build
-         podTemplate: {nodeSelector: {kubernetes.io/arch: amd64}}
      taskRunTemplate: {serviceAccountName: paperclip-build}
      workspaces:
        - name: dockerconfig

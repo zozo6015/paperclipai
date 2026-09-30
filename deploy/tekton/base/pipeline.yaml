@@ -17,9 +17,10 @@ spec:
     - name: platforms
       default: linux/amd64,linux/arm64
       description: >-
-        Comma-separated target platforms. Non-native ones are built under the
-        QEMU user emulators bundled in the BuildKit image (amd64 -> arm64 etc.;
-        there is no bundled amd64 emulator, so run the build on amd64 nodes).
+        Comma-separated target platforms. The node's own architecture builds
+        natively; the others run under the QEMU user emulators bundled in the
+        BuildKit image (its amd64 variant emulates arm64, its arm64 variant
+        emulates amd64), so nodes need no binfmt/QEMU setup.
     - name: release-tags
       type: array
       default: []
