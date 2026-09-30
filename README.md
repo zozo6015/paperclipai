@@ -8,7 +8,7 @@ This repository does not fork Paperclip. It builds upstream Paperclip at a
 pinned commit into a small, non-root, distroless image, and provides
 Kustomize manifests and a Tekton pipeline to run and publish it on any
 Kubernetes cluster.
-
+ 
 | | |
 |---|---|
 | Image | `ghcr.io/zozo6015/paperclipai` |
