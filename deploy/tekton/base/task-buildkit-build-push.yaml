@@ -90,8 +90,8 @@ spec:
         printf '%s' "$(params.image)@$digest" > "$(results.IMAGE_URL.path)"
         echo "pushed $(params.image):$(params.tag) @ $digest"
 
-        # Read the installed Paperclip version from the Dockerfile's `version`
-        # target (same context/args, served from the local build cache).
+        # Read the Paperclip release the image is based on from the
+        # Dockerfile's `version` target (same context/args).
         # shellcheck disable=SC2086
         buildctl-daemonless.sh build \
           --frontend dockerfile.v0 \

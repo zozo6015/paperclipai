@@ -4,29 +4,28 @@ A hardened container image and Kubernetes deployment for
 [Paperclip](https://github.com/paperclipai/paperclip), the open-source app
 for managing AI agents for work ([docs](https://docs.paperclip.ing)).
 
-This repository does not fork Paperclip. It builds upstream Paperclip at a
-pinned commit into a small, non-root, distroless image, and provides
-Kustomize manifests and a Tekton pipeline to run and publish it on any
-Kubernetes cluster.
+This repository does not fork Paperclip. Its image is the official upstream
+image, pinned by digest, plus the [CodeRabbit](https://coderabbit.ai) CLI.
+It also provides hardened Kustomize manifests and a Tekton pipeline to build
+and publish that image and run it on any Kubernetes cluster.
  
 | | |
 |---|---|
 | Image | `ghcr.io/zozo6015/paperclipai` |
-| Runtime base | `gcr.io/distroless/nodejs24-debian13:nonroot` (UID 65532) |
+| Base | `ghcr.io/paperclipai/paperclip` (official, multi-arch), pinned in [`docker/Dockerfile`](docker/Dockerfile) |
 | Platforms | `linux/amd64`, `linux/arm64` (e.g. Raspberry Pi 4/5 with a 64-bit OS) |
-| Upstream version | npm release of `@paperclipai/server` pinned in [`docker/package.json`](docker/package.json) + lockfile |
+| Added | CodeRabbit CLI (`coderabbit`, `cr`) |
+| Runs as | UID/GID 65532, read-only root filesystem |
 | Deployment | Kustomize base + components + overlays |
 | CI | Tekton (rootless BuildKit, Trivy); no GitHub Actions |
 
-> **Status:** the npm-based image has been started locally against PostgreSQL
-> (health, UI, migrations) and its arm64 native modules were load-tested; its
-> first full Tekton build is still pending. The Kustomize output is
-> schema-validated.
+> **Status:** the image built on the official upstream image has not had its
+> first Tekton build yet. The Kustomize output is schema-validated.
 
 ## Contents
 
 ```
-docker/Dockerfile                        multi-stage image build
+docker/Dockerfile                        official image + CodeRabbit CLI
 deploy/README.md                         full deployment guide
 deploy/kubernetes/base                   cluster-agnostic manifests
 deploy/kubernetes/components/
@@ -85,63 +84,46 @@ flowchart LR
 
 ## The image
 
-Built in stages:
+[`docker/Dockerfile`](docker/Dockerfile) starts from the official
+`ghcr.io/paperclipai/paperclip` image, pinned by tag and digest, and adds the
+CodeRabbit CLI. Paperclip itself is not rebuilt.
 
 ```mermaid
 flowchart LR
-    lock["docker/package.json<br/>+ package-lock.json"] --> install["install<br/>npm, build platform,<br/>target --os/--cpu"]
-    tools["tools<br/>git, sh, tar, ps, ssh, tini, npm"]
-    base[("distroless<br/>nodejs24-debian13:nonroot")] --> runtime
-    install --> runtime["runtime"]
-    tools --> runtime
+    up[("ghcr.io/paperclipai/paperclip<br/>pinned digest")] --> runtime["runtime<br/>+ CodeRabbit CLI"]
+    runtime --> ghcr[("ghcr.io/zozo6015/paperclipai")]
 ```
 
-1. **install**: runs on the *build* machine's own architecture and is never
-   emulated. It installs the published, prebuilt `@paperclipai/server`
-   release, the same package the upstream quickstart installs. It pins the
-   whole dependency tree with the committed lockfile, and fetches the target
-   platform's prebuilt native packages via `npm install --os/--cpu` without
-   running install scripts. Nothing is compiled.
-2. **tools**: `git`, `sh` (dash), `bash`, `tar`, `ps`, `ssh`, `tini` and
-   `npm`, with only the shared libraries the distroless base lacks.
-3. **runtime**: the distroless base, plus the tools, plus the app. A smoke test
-   checks that every copied tool starts.
+What the upstream image already contains:
+- A Debian (trixie) userland with Node 24, `bash`, coreutils, `git`, `gh`,
+  `curl`, `wget`, `ripgrep`, `jq`, `python3`, `ssh` and `tini`.
+- The agent CLIs for the local adapters: Claude Code, Codex, OpenCode, Gemini
+  CLI and Kimi. Upstream installs their newest releases whenever it builds an
+  image. They log in from the Paperclip UI and keep their credentials under
+  `HOME=/paperclip`, the persistent volume.
+- `paperclip-runnerd`, built natively for each platform.
 
-Why it is not *pure* distroless: the Paperclip server itself runs `git`,
-`tar` and `sh` (workspace clones, sandbox payloads) and `npm` (plugin
-installs), and its `claude_local` adapter runs the Claude Code CLI, which
-needs `bash`. Everything else a normal Debian image has is absent: there is
-no package manager and there are no compilers. Package metadata for
-the copied tools is kept, so image scanners still report their CVEs.
+CodeRabbit is installed with its official installer
+(`curl -fsSL https://cli.coderabbit.ai/install.sh | sh`) and placed in
+`/usr/local/bin` as `coderabbit` and `cr`. The installer always fetches the
+current release. The build's layer cache keeps that version until you pass a
+new `CODERABBIT_CACHE_EPOCH` build arg. Log in once with
+`coderabbit auth login`; the login is stored under `/paperclip` too.
 
-**Limitations:**
-- Of the local agent CLIs, only Claude Code (`claude`) is included. Unlike
-  upstream's own Docker image, it does not add Codex, Gemini, … to `PATH`,
-  so those adapters will not find their CLI. Run such agents in sandbox pods
-  (see
-  [`kubernetes-sandbox`](deploy/kubernetes/components/kubernetes-sandbox)) or
-  through remote/gateway adapters.
-- Upstream publishes the bundled `paperclip-runnerd` binary for x86-64 only.
-  On arm64 the experimental native runner (`enableNativeRunner`, off by
-  default) therefore cannot start. Everything else runs natively.
+Upstream's entrypoint runs the server directly when the container starts
+unprivileged, as it does here (UID 65532 with all capabilities dropped).
+`USER_UID`/`USER_GID` in the ConfigMap tell it which user that is.
 
 Build locally (Docker with BuildKit):
 
 ```sh
 docker buildx build -f docker/Dockerfile -t paperclip:dev .
-```
-
-Multi-arch locally. Only the small `tools` stage and the smoke test run under
-QEMU emulation for the non-native platform:
-
-```sh
 docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
   -t <registry>/paperclip:dev --push .
 ```
 
-The build needs network access to the npm registry and the Debian mirrors,
-and takes a few minutes. The image is about 1.4 GB, mostly the agent SDKs that
-`@paperclipai/server` depends on (Codex, Claude Agent SDK).
+The build needs network access to ghcr.io and `cli.coderabbit.ai`. The image
+is several GB, mostly the agent CLIs.
 
 ### Image tags
 
@@ -150,7 +132,7 @@ and takes a few minutes. The image is about 1.4 GB, mostly the agent SDKs that
 | `sha-<commit>` | every build (commit of *this* repository) |
 | `latest` | push to `main`, after the vulnerability scan passes |
 | `vX.Y.Z` | push of a `v*` git tag, after the scan passes |
-| `<paperclip version>` (e.g. `2026.916.1`) | every clean build: the `@paperclipai/server` release installed in the image; moves to the newest build of that release |
+| `<paperclip version>` (e.g. `2026.916.1`) | every clean build: the upstream release the image is based on (`PAPERCLIP_VERSION` in the Dockerfile); moves to the newest build of that release |
 | `buildcache` | BuildKit layer cache; not a runnable image |
 
 Deploy by `sha-<commit>` or digest rather than `latest`. Images carry SBOM and
@@ -212,7 +194,8 @@ them from an overlay.
 | `DATABASE_URL` | Secret `paperclip-db-app` / `uri` | PostgreSQL connection string |
 | `BETTER_AUTH_SECRET` | Secret `paperclip-secrets` | Session/auth signing secret |
 | `PAPERCLIP_SECRETS_MASTER_KEY` | Secret `paperclip-secrets` | Encryption key for stored secrets |
-| `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | Secret `paperclip-secrets` (optional) | Claude Code credentials for `claude_local` agents |
+| `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | Secret `paperclip-secrets` (optional) | Claude Code credentials, instead of logging in from the UI |
+| `USER_UID` / `USER_GID` | `65532` | The pod's user, for the upstream entrypoint |
 
 See upstream
 [`docs/deploy/environment-variables.md`](https://github.com/paperclipai/paperclip/blob/master/docs/deploy/environment-variables.md)
@@ -235,8 +218,8 @@ always created with `kubectl` (or your secret manager), never committed.
 | Privileges | all capabilities dropped, no privilege escalation, `RuntimeDefault` seccomp |
 | API access | no service-account token mounted (unless the sandbox component is enabled) |
 | Network | namespace default-deny; server egress limited to DNS, 5432, 443, 80, 22 |
-| Supply chain | base images pinned by digest, SBOM + provenance attestations, Trivy gate before release tags |
-| PID 1 | `tini`, which reaps orphaned `git`/`ssh` child processes |
+| Supply chain | upstream image pinned by digest, SBOM + provenance attestations, Trivy gate before release tags |
+| PID 1 | `tini`, which reaps orphaned agent child processes |
 
 The Tekton build namespace (`paperclip-ci`) is the one exception to
 `restricted`: rootless BuildKit needs `Unconfined` seccomp/AppArmor to create
@@ -245,18 +228,18 @@ that namespace for builds only.
 
 ## Upgrading Paperclip
 
-1. Pick a release: `npm view @paperclipai/server versions`.
-2. Update the pin and the lockfile (with Node 24 / npm 11), then push to
-   `main`. Tekton builds, scans and tags the new image.
+1. Pick a release from the
+   [upstream packages](https://github.com/paperclipai/paperclip/pkgs/container/paperclip).
+2. In [`docker/Dockerfile`](docker/Dockerfile), set `PAPERCLIP_IMAGE` to its
+   tag and index digest, and `PAPERCLIP_VERSION` to the release. Get the
+   digest with:
 
    ```sh
-   cd docker
-   npm install --package-lock-only --save-exact --no-audit --no-fund @paperclipai/server@<version>
+   docker buildx imagetools inspect ghcr.io/paperclipai/paperclip:<version> \
+     --format '{{ .Manifest.Digest }}'
    ```
-
-   Claude Code is upgraded the same way, with
-   `@anthropic-ai/claude-code@<version>` (`npm view @anthropic-ai/claude-code version`).
-3. Set `newTag: sha-<commit>` in your overlay and `kubectl apply -k …`.
+3. Push to `main`. Tekton builds, scans and tags the new image.
+4. Set `newTag: sha-<commit>` in your overlay and `kubectl apply -k …`.
    Migrations run automatically on start. Back up the database first.
 
 ## Operations

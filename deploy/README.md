@@ -1,7 +1,7 @@
 # Deploying Paperclip on Kubernetes
 
 ```
-docker/Dockerfile                      distroless multi-stage image build
+docker/Dockerfile                      official Paperclip image + CodeRabbit CLI
 deploy/kubernetes/base                 cluster-agnostic manifests (Kustomize)
 deploy/kubernetes/components/
   cloudnativepg                        PostgreSQL via the CloudNativePG operator
@@ -18,35 +18,18 @@ GitHub Actions are involved.
 
 ## The image
 
-`docker/Dockerfile` installs the published npm release of
-[Paperclip](https://github.com/paperclipai/paperclip) (`@paperclipai/server`,
-pinned with its whole dependency tree by `docker/package.json` and
-`docker/package-lock.json`) and ships it on
-`gcr.io/distroless/nodejs24-debian13:nonroot` (UID 65532). Nothing is
-compiled: the install runs on the build machine's own architecture and fetches
-the target platform's prebuilt native packages. All base images are pinned by
-digest.
-
-It is *distroless plus a minimal tool overlay*, not pure distroless: the
-Paperclip server itself executes `git`, `tar` and `sh` (workspace clones in
-the heartbeat loop, sandbox payload packaging) and `npm` (plugin installs).
-Those binaries and only the shared libraries missing from the distroless base
-are copied in, with dpkg metadata so scanners still see them. No package
-manager or compiler is included.
-
-The Claude Code CLI (`claude`, pinned in `docker/package.json`) is included
-for the `claude_local` adapter, together with `bash`, which its Bash tool
-requires. The adapter starts `claude` as a child process in the server
-container, with the agent workspace as its working directory, so it has to be
-in the same image; a sidecar container cannot serve it. Other local CLIs
-(codex, gemini, …) are not included: run those agents in sandboxes (the
-`kubernetes-sandbox` component + upstream plugin) or through remote adapters.
+`docker/Dockerfile` builds on the official `ghcr.io/paperclipai/paperclip`
+image (pinned by tag and digest) and adds the CodeRabbit CLI, installed with
+`curl -fsSL https://cli.coderabbit.ai/install.sh | sh`. The upstream image
+already carries a Debian userland and the agent CLIs the local adapters start
+in the server container (Claude Code, Codex, OpenCode, Gemini, Kimi). A
+sidecar container cannot serve those adapters, because they run the CLI as a
+child process in the agent's workspace.
 
 Build locally:
 
 ```sh
 docker buildx build -f docker/Dockerfile -t paperclip:dev .
-# another upstream commit:
 ```
 
 ## Kubernetes
@@ -68,7 +51,8 @@ kubectl -n paperclip create secret generic paperclip-secrets \
   --from-literal=PAPERCLIP_AGENT_JWT_SECRET="$(openssl rand -base64 48)"
 ```
 
-For `claude_local` agents, add one Claude Code credential to the same Secret:
+Agent CLIs normally log in from the Paperclip UI. For Claude Code you can
+instead add one credential to the same Secret:
 `ANTHROPIC_API_KEY` (API billing) or `CLAUDE_CODE_OAUTH_TOKEN` (a Claude
 subscription; create it with `claude setup-token` on a machine with a
 browser). Both keys are optional, and the pod needs a restart to pick up a
@@ -159,9 +143,8 @@ Images are multi-arch (`linux/amd64,linux/arm64`, pipeline parameter
 `platforms`). The build node's own architecture builds natively; the other one
 runs under the QEMU user emulators bundled in the BuildKit image (the amd64
 image emulates arm64 and vice versa), so nodes need no binfmt/QEMU setup and
-the build can run on either architecture. Only the small `tools` stage and the
-image smoke test run emulated. The heavy `npm install` always runs natively.
-Trivy scans every platform.
+the build can run on either architecture. Only the CodeRabbit install step
+runs emulated for the foreign platform. Trivy scans every platform.
 
 The `paperclip-ci` namespace is labelled Pod Security `privileged` because
 rootless BuildKit needs `Unconfined` seccomp/AppArmor to create user

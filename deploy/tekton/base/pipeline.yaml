@@ -30,8 +30,9 @@ spec:
       type: array
       default: []
       description: >-
-        Extra KEY=VALUE Dockerfile build args (the Paperclip version itself is
-        pinned in docker/package.json and docker/package-lock.json).
+        Extra KEY=VALUE Dockerfile build args, e.g. CODERABBIT_CACHE_EPOCH=<date>
+        to pick up a new CodeRabbit release (the Paperclip version itself is
+        pinned in docker/Dockerfile).
     - name: scan-severity
       default: CRITICAL,HIGH
   workspaces:

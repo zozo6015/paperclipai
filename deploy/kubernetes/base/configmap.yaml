@@ -16,3 +16,8 @@ data:
   # Migrations are applied on start (the server auto-applies without a TTY;
   # this makes it explicit).
   PAPERCLIP_MIGRATION_AUTO_APPLY: "true"
+  # The pod runs as 65532 (see deployment.yaml). Telling the image's
+  # entrypoint so keeps it from warning that it cannot remap its default
+  # user (UID 1000) without root.
+  USER_UID: "65532"
+  USER_GID: "65532"
