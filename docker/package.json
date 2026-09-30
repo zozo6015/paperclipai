@@ -1,0 +1,8 @@
+{
+  "name": "paperclip-image",
+  "private": true,
+  "description": "Pins the Paperclip server release baked into the image. Upgrade: see deploy/README.md.",
+  "dependencies": {
+    "@paperclipai/server": "2026.916.1"
+  }
+}

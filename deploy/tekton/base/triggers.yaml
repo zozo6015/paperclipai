@@ -49,11 +49,8 @@ spec:
             value: $(tt.params.git-revision)
           - name: release-tags
             value: ["$(tt.params.release-tag)"]
-        # The non-native platform is built under QEMU emulation (bundled in
-        # the BuildKit image for every node architecture), which is several
-        # times slower than native.
         timeouts:
-          pipeline: 6h0m0s
+          pipeline: 2h0m0s
         taskRunTemplate:
           serviceAccountName: paperclip-build
           podTemplate:

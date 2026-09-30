@@ -29,8 +29,8 @@ spec:
       type: array
       default: []
       description: >-
-        Extra KEY=VALUE Dockerfile build args, e.g. PAPERCLIP_REF=<upstream sha>
-        to build a different upstream Paperclip commit than the Dockerfile pin.
+        Extra KEY=VALUE Dockerfile build args (the Paperclip version itself is
+        pinned in docker/package.json and docker/package-lock.json).
     - name: scan-severity
       default: CRITICAL,HIGH
   workspaces:

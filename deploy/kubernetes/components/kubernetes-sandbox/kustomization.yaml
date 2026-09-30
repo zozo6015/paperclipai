@@ -2,8 +2,8 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 # OPTIONAL. Lets the Paperclip server run agents in isolated pods via the
-# upstream @paperclipai/plugin-kubernetes sandbox provider (prebuilt into the
-# image at /app/packages/plugins/sandbox-providers/kubernetes). The image
+# upstream @paperclipai/plugin-kubernetes sandbox provider (installed from npm
+# at runtime, see deploy/README.md). The image
 # ships no coding-agent CLIs, so agents must run in sandboxes or via remote
 # adapters.
 #

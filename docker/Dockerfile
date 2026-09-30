@@ -1,117 +1,65 @@
 # syntax=docker/dockerfile:1.20
 #
-# Paperclip AI — hardened, distroless production image.
+# Paperclip AI — hardened, distroless, multi-arch production image.
 #
-# The Paperclip source is not vendored in this repository: the `source` stage
-# fetches upstream at a pinned commit (PAPERCLIP_REF), so a build is fully
-# reproducible from this file alone. Bump PAPERCLIP_REF to upgrade.
+# Paperclip is installed from its published npm release (the same package the
+# upstream quickstart installs), pinned together with its whole dependency
+# tree by docker/package.json + docker/package-lock.json. Nothing is compiled.
 #
 # Stages
-#   source    upstream git checkout at PAPERCLIP_REF (no .git)
-#   build     pnpm + Rust toolchain; builds UI, plugin SDK, server (+ the
-#             vendored paperclip-runnerd binary) and the Kubernetes
-#             sandbox-provider plugin
-#   prune     drops devDependencies and build-only trees from /app
-#   tools     minimal runtime tool overlay (git, sh, tar, ps, ssh, tini) with
-#             only the shared libraries the distroless base does not already have
+#   install   runs on the BUILD platform (never emulated): `npm ci` fetches the
+#             prebuilt native packages for the TARGET platform via --os/--cpu,
+#             with install scripts disabled, so nothing target-specific runs
+#   tools     minimal runtime tool overlay (git, sh, tar, ps, ssh, tini, npm)
+#             with only the shared libraries the distroless base lacks
 #   runtime   gcr.io/distroless/nodejs24-debian13:nonroot + overlay + app
 #
 # Why not "pure" distroless: the Paperclip server itself shells out to git,
 # tar and sh (workspace clones in the heartbeat loop, sandbox payload
-# packaging, plugin installs via npm). Those binaries are copied in as a
-# minimal overlay; there is still no package manager, no apt/dpkg tooling,
-# no compilers and no coding-agent CLIs in the final image. Agents are meant
-# to run in isolated pods via the Kubernetes sandbox-provider plugin.
+# packaging) and npm (plugin installs). Those binaries are copied in as a
+# minimal overlay; there is still no package manager, no apt/dpkg tooling and
+# no compiler in the final image.
 
-ARG PAPERCLIP_REPO=https://github.com/paperclipai/paperclip.git
-ARG PAPERCLIP_REF=d30b03bd8c17604cdab1533eeeeb087aba30e8b1
 ARG NODE_BUILD_IMAGE=node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
 ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 ARG RUNTIME_IMAGE=gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d
 
 # -----------------------------------------------------------------------------
-FROM scratch AS source
-ARG PAPERCLIP_REPO
-ARG PAPERCLIP_REF
-ADD --keep-git-dir=false ${PAPERCLIP_REPO}#${PAPERCLIP_REF} /
-
-# -----------------------------------------------------------------------------
-FROM ${NODE_BUILD_IMAGE} AS build
+FROM --platform=$BUILDPLATFORM ${NODE_BUILD_IMAGE} AS install
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-       ca-certificates curl git python3 gcc g++ make libc6-dev pkg-config \
-  && rm -rf /var/lib/apt/lists/*
-
-# Rust toolchain for the vendored paperclip-runnerd binary. rustup-init is
-# version-pinned and checksum-verified (same pins as upstream); the compiler
-# version itself comes from upstream's rust-toolchain.toml.
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-ARG RUSTUP_VERSION=1.29.0
-ARG RUSTUP_SHA256_AMD64=4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10
-ARG RUSTUP_SHA256_ARM64=9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792
-RUN set -eux; \
-    case "$(dpkg --print-architecture)" in \
-      amd64) target=x86_64-unknown-linux-gnu;  sha="$RUSTUP_SHA256_AMD64" ;; \
-      arm64) target=aarch64-unknown-linux-gnu; sha="$RUSTUP_SHA256_ARM64" ;; \
-      *) echo "unsupported architecture" >&2; exit 1 ;; \
+ARG TARGETARCH
+WORKDIR /opt/paperclip
+COPY docker/package.json docker/package-lock.json ./
+RUN --mount=type=cache,id=paperclip-npm,target=/root/.npm \
+    set -eux; \
+    case "$TARGETARCH" in \
+      amd64) cpu=x64 ;; \
+      arm64) cpu=arm64 ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac; \
-    curl -fsSLo /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${target}/rustup-init"; \
-    echo "${sha}  /tmp/rustup-init" | sha256sum -c -; \
-    chmod +x /tmp/rustup-init; \
-    /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none; \
-    rm /tmp/rustup-init
-
-WORKDIR /app
-COPY --from=source / /app/
-RUN cd packages/paperclip-runner && rustup show
-
-ENV CI=true \
-    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-    NODE_OPTIONS=--max-old-space-size=4096
-RUN corepack enable && pnpm config set store-dir /pnpm/store
-
-RUN --mount=type=cache,id=paperclip-pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile
-
-ARG PAPERCLIP_BUILD_COMMIT=""
-RUN --mount=type=cache,id=paperclip-cargo-registry,target=/usr/local/cargo/registry \
-    set -eux; \
-    pnpm --filter @paperclipai/ui build; \
-    pnpm --filter @paperclipai/plugin-sdk build; \
-    pnpm --filter @paperclipai/server build; \
-    test -f server/dist/index.js; \
-    test -f ui/dist/index.html
-
-# Pre-build the Kubernetes sandbox-provider plugin so it can be installed from
-# the image (`--local`) without npm/pnpm/tsc at runtime. Upstream excludes the
-# sandbox providers from the pnpm workspace and installs them standalone.
-RUN --mount=type=cache,id=paperclip-pnpm,target=/pnpm/store \
-    set -eux; \
-    dir=packages/plugins/sandbox-providers/kubernetes; \
-    pnpm -C "$dir" install --ignore-workspace --no-lockfile; \
-    pnpm -C "$dir" build; \
-    test -f "$dir/dist/manifest.js"
-
-# -----------------------------------------------------------------------------
-FROM build AS prune
-# The server runs through the tsx ESM loader (workspace packages export .ts
-# sources), but tsx is a devDependency. Install the exact same version into
-# an isolated prefix before pruning devDependencies from the workspace.
-RUN set -eux; \
-    tsx_version="$(node -p 'require("/app/server/node_modules/tsx/package.json").version')"; \
-    npm install --omit=dev --no-audit --no-fund \
-      --prefix /opt/tsx "tsx@${tsx_version}"; \
-    test -f /opt/tsx/node_modules/tsx/dist/loader.mjs
-RUN --mount=type=cache,id=paperclip-pnpm,target=/pnpm/store \
-    set -eux; \
-    rm -rf packages/paperclip-runner/runner/target /usr/local/cargo /usr/local/rustup; \
-    pnpm install --prod --frozen-lockfile --offline --ignore-scripts; \
-    # Only trees that are provably build-only; other top-level folders
-    # (docs, skills, announcements, ...) are read by the server at runtime.
-    rm -rf ui/src ui/public ui/node_modules/.vite screenshots .github
+    # `npm install` with the committed lockfile installs exactly the locked
+    # versions. (`npm ci` refuses this tree: its sync check wants esbuild's
+    # platform variants inside bundleDependencies, which are not published.)
+    npm install --no-save --omit=dev --ignore-scripts --no-audit --no-fund \
+      --os=linux --cpu="$cpu" --libc=glibc; \
+    # Packages published with bundleDependencies (inside @paperclipai/server
+    # and @paperclipai/adapter-utils) carry the esbuild binary of the machine
+    # they were packed on. Give every esbuild copy its target-platform binary
+    # (same version) and drop the others.
+    find node_modules -path '*node_modules/esbuild/package.json' -print0 | \
+    while IFS= read -r -d '' pj; do \
+      nm="$(dirname "$(dirname "$pj")")"; \
+      ver="$(node -p "require('./$pj').version")"; \
+      want="$nm/@esbuild/linux-$cpu"; \
+      if [ ! -d "$want" ]; then \
+        npm pack --silent --pack-destination /tmp "@esbuild/linux-$cpu@$ver"; \
+        mkdir -p "$want"; \
+        tar -xzf "/tmp/esbuild-linux-$cpu-$ver.tgz" -C "$want" --strip-components=1; \
+      fi; \
+      for other in "$nm"/@esbuild/*; do [ "$other" = "$want" ] || rm -rf "$other"; done; \
+    done; \
+    test -f node_modules/@paperclipai/server/dist/index.js; \
+    test -f node_modules/@paperclipai/server/ui-dist/index.html
 
 # -----------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS distroless-ref
@@ -123,7 +71,8 @@ RUN apt-get update \
        ca-certificates dash git openssh-client procps tar tini \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=distroless-ref / /distroless/
-COPY --from=build /usr/local/lib/node_modules/npm /rootfs/usr/local/lib/node_modules/npm
+# npm is pure JavaScript, so the build-platform copy works on any target.
+COPY --from=install /usr/local/lib/node_modules/npm /rootfs/usr/local/lib/node_modules/npm
 # Assemble /rootfs: requested binaries + git helpers + every shared library
 # they need that the distroless base does not already ship. The distroless
 # base is merged-/usr (/bin -> usr/bin), so everything lands under /usr.
@@ -161,20 +110,15 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS runtime
-ARG PAPERCLIP_REF
-ARG PAPERCLIP_BUILD_VERSION=""
 LABEL org.opencontainers.image.title="paperclip" \
       org.opencontainers.image.description="Paperclip AI server (distroless, non-root)" \
       org.opencontainers.image.source="https://github.com/zozo6015/paperclipai" \
-      org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.revision="${PAPERCLIP_REF}" \
-      org.opencontainers.image.version="${PAPERCLIP_BUILD_VERSION}"
+      org.opencontainers.image.licenses="MIT"
 
 COPY --from=tools /rootfs/ /
-COPY --from=prune /opt/tsx /opt/tsx
 # Application code is root-owned and read-only for the runtime user. Only
 # PAPERCLIP_HOME (a mounted volume) and /tmp are writable.
-COPY --from=prune /app /app
+COPY --from=install /opt/paperclip /opt/paperclip
 
 ENV NODE_ENV=production \
     HOME=/paperclip \
@@ -183,25 +127,24 @@ ENV NODE_ENV=production \
     PAPERCLIP_CONFIG=/paperclip/instances/default/config.json \
     PAPERCLIP_DEPLOYMENT_MODE=authenticated \
     PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
-    PAPERCLIP_BUILD_COMMIT=${PAPERCLIP_REF} \
-    PAPERCLIP_BUILD_VERSION=${PAPERCLIP_BUILD_VERSION} \
     HOST=0.0.0.0 \
     PORT=3100 \
     SERVE_UI=true \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_CACHE=/tmp/.npm \
-    PATH=/nodejs/bin:/usr/local/bin:/usr/bin
+    PATH=/nodejs/bin:/opt/paperclip/node_modules/.bin:/usr/local/bin:/usr/bin
 
-# Smoke-test the tool overlay in the real final filesystem (also under QEMU
-# emulation for foreign platforms): every binary must start, i.e. all its
-# shared libraries resolve. git-remote-https prints its usage and exits
-# non-zero when it starts correctly. Adds only an empty layer.
-RUN ["/usr/bin/sh", "-c", "set -e; git --version; tar --version >/dev/null; ps --version; ssh -V; tini --version; node --version; npm --version >/dev/null; out=\"$(/usr/lib/git-core/git-remote-https 2>&1 || true)\"; case \"$out\" in *remote-curl*) ;; *) echo \"$out\" >&2; exit 1 ;; esac"]
+# Smoke-test the tool overlay in the real final filesystem (under QEMU for a
+# foreign target platform): every binary must start, i.e. all its shared
+# libraries resolve. git-remote-https prints its usage and exits non-zero when
+# it starts correctly. Kept free of JavaScript so no V8 runs under emulation.
+# Adds only an empty layer.
+RUN ["/usr/bin/sh", "-c", "set -e; git --version; tar --version >/dev/null; ps --version; ssh -V; tini --version; node --version; out=\"$(/usr/lib/git-core/git-remote-https 2>&1 || true)\"; case \"$out\" in *remote-curl*) ;; *) echo \"$out\" >&2; exit 1 ;; esac"]
 
-WORKDIR /app
+WORKDIR /opt/paperclip/node_modules/@paperclipai/server
 USER 65532:65532
 EXPOSE 3100
 
 # tini is PID 1 so orphaned git/ssh/tar children of agent runs are reaped.
 ENTRYPOINT ["/usr/bin/tini", "--", "/nodejs/bin/node"]
-CMD ["--import", "/opt/tsx/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
+CMD ["dist/index.js"]

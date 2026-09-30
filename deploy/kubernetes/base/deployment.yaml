@@ -64,6 +64,13 @@ spec:
                 secretKeyRef:
                   name: paperclip-secrets
                   key: PAPERCLIP_SECRETS_MASTER_KEY
+            # Signs agent API tokens; falls back to BETTER_AUTH_SECRET if absent.
+            - name: PAPERCLIP_AGENT_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: paperclip-secrets
+                  key: PAPERCLIP_AGENT_JWT_SECRET
+                  optional: true
             - name: TMPDIR
               value: /tmp
           securityContext:
