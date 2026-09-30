@@ -31,8 +31,9 @@ deploy/kubernetes/components/
   gateway-api                            HTTPRoute on an existing Gateway
   kubernetes-sandbox                     optional RBAC for agent sandbox pods
 deploy/kubernetes/overlays/zolab         reference overlay (Cilium, CNPG, iSCSI)
-deploy/tekton/base                       build → scan → promote pipeline + webhook trigger
-deploy/tekton/overlays/zolab             reference webhook exposure
+deploy/tekton/base                       build → scan → promote pipeline + GitHub Trigger
+deploy/tekton/components/eventlistener   optional dedicated EventListener
+deploy/tekton/overlays/zolab             reference overlay (shares an existing EventListener)
 ```
 
 ## Architecture
@@ -57,9 +58,10 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    push(["git push: main or tag v*"]) -->|"webhook"| el
+    push(["git push: main or tag v*"]) -->|"webhook"| el["EventListener<br/>shared or dedicated"]
+    el -->|"selects Trigger"| trig
     subgraph pipe["namespace: paperclip-ci"]
-        el["EventListener<br/>signature check + filter"] --> pr["PipelineRun paperclip-image"]
+        trig["Trigger paperclip-github-push<br/>signature check + filter"] --> pr["PipelineRun paperclip-image"]
         pr --> build["build<br/>rootless BuildKit"]
         build --> scan["scan<br/>Trivy"]
         scan -->|"no fixable HIGH/CRITICAL"| promote["promote<br/>crane tag"]
