@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Tekton CI for the Paperclip image. Requires Tekton Pipelines and Tekton
+# Triggers (with its interceptors) to be installed in the cluster.
+namespace: paperclip-ci
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: paperclip-ci
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - task-buildkit-build-push.yaml
+  - task-trivy-scan.yaml
+  - task-crane-tag.yaml
+  - pipeline.yaml
+  - triggers.yaml

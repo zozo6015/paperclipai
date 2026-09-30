@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: paperclip-data
+spec:
+  # Single-writer volume for PAPERCLIP_HOME (instance config, local file
+  # storage, managed workspaces). storageClassName is left to the overlay;
+  # unset means the cluster's default StorageClass.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi

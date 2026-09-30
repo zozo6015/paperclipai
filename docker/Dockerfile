@@ -69,8 +69,7 @@ COPY --from=source / /app/
 RUN cd packages/paperclip-runner && rustup show
 
 ENV CI=true \
-    PNPM_HOME=/pnpm \
-    PATH=/pnpm:$PATH \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     NODE_OPTIONS=--max-old-space-size=4096
 RUN corepack enable && pnpm config set store-dir /pnpm/store
 
@@ -103,18 +102,16 @@ FROM build AS prune
 # an isolated prefix before pruning devDependencies from the workspace.
 RUN set -eux; \
     tsx_version="$(node -p 'require("/app/server/node_modules/tsx/package.json").version')"; \
-    npm install --global-style --omit=dev --no-audit --no-fund --ignore-scripts \
+    npm install --omit=dev --no-audit --no-fund \
       --prefix /opt/tsx "tsx@${tsx_version}"; \
     test -f /opt/tsx/node_modules/tsx/dist/loader.mjs
 RUN --mount=type=cache,id=paperclip-pnpm,target=/pnpm/store \
     set -eux; \
     rm -rf packages/paperclip-runner/runner/target /usr/local/cargo /usr/local/rustup; \
     pnpm install --prod --frozen-lockfile --offline --ignore-scripts; \
-    rm -rf ui/src ui/public ui/node_modules/.vite docs doc evals tests screenshots report releases \
-           design announcements .github; \
-    find . -name '*.map' -path '*/dist/*' -delete; \
-    find . -type d \( -name __tests__ -o -name test -o -name tests \) -path '*/packages/*' \
-         -not -path '*/node_modules/*' -prune -exec rm -rf {} +
+    # Only trees that are provably build-only; other top-level folders
+    # (docs, skills, announcements, ...) are read by the server at runtime.
+    rm -rf ui/src ui/public ui/node_modules/.vite screenshots .github
 
 # -----------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS distroless-ref
@@ -164,7 +161,9 @@ RUN set -eux; \
     # Smoke-test the overlay inside a chroot of distroless + overlay.
     mkdir -p /check && cp -a /distroless/. /check/ && cp -a /rootfs/. /check/; \
     chroot /check /usr/bin/sh -c 'git --version && tar --version | head -1 && ps --version && ssh -V && tini --version && node --version && npm --version'; \
-    chroot /check /usr/lib/git-core/git-remote-https 2>&1 | grep -q 'remote-curl'
+    # Prints its usage (and exits non-zero) only if all its libraries resolve.
+    { chroot /check /usr/lib/git-core/git-remote-https 2>&1 || true; } | grep -q 'remote-curl'; \
+    rm -rf /check
 
 # -----------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS runtime

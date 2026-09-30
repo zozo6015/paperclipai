@@ -1,0 +1,42 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: crane-tag
+spec:
+  description: Adds tags to an already-pushed image digest (runs only after the scan passed).
+  params:
+    - name: image
+    - name: digest
+    - name: tags
+      type: array
+  workspaces:
+    - name: dockerconfig
+      readOnly: true
+  steps:
+    - name: tag
+      # :debug variant ships a busybox shell for the loop below.
+      image: gcr.io/go-containerregistry/crane/debug:v0.22.1@sha256:e78770b31258a3846f878036d9c1f63fbe4c871f9f56990bf77fd95c013e3c1b
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+        - name: HOME
+          value: /tmp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      args: ["$(params.tags[*])"]
+      script: |
+        #!/busybox/sh
+        set -eu
+        for t in "$@"; do
+          [ -n "$t" ] || continue
+          crane tag "$(params.image)@$(params.digest)" "$t"
+          echo "tagged $(params.image):$t -> $(params.digest)"
+        done
