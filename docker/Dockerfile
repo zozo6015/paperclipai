@@ -10,13 +10,16 @@
 #   install   runs on the BUILD platform (never emulated): `npm ci` fetches the
 #             prebuilt native packages for the TARGET platform via --os/--cpu,
 #             with install scripts disabled, so nothing target-specific runs
-#   tools     minimal runtime tool overlay (git, sh, tar, ps, ssh, tini, npm)
+#   tools     minimal runtime tool overlay (git, sh, bash, tar, ps, ssh, tini,
+#             npm)
 #             with only the shared libraries the distroless base lacks
 #   runtime   gcr.io/distroless/nodejs24-debian13:nonroot + overlay + app
 #
 # Why not "pure" distroless: the Paperclip server itself shells out to git,
 # tar and sh (workspace clones in the heartbeat loop, sandbox payload
-# packaging) and npm (plugin installs). Those binaries are copied in as a
+# packaging) and npm (plugin installs), and its claude_local adapter runs the
+# Claude Code CLI (a native glibc binary whose Bash tool needs bash) as a child
+# process in the same container. Those binaries are copied in as a
 # minimal overlay; there is still no package manager, no apt/dpkg tooling and
 # no compiler in the final image.
 
@@ -58,6 +61,15 @@ RUN --mount=type=cache,id=paperclip-npm,target=/root/.npm \
       fi; \
       for other in "$nm"/@esbuild/*; do [ "$other" = "$want" ] || rm -rf "$other"; done; \
     done; \
+    # Claude Code for the claude_local adapter. Its postinstall (skipped by
+    # --ignore-scripts) would put the target's native binary over the
+    # bin/claude.exe stub; do the same by moving it (no second ~240 MB copy).
+    cc=node_modules/@anthropic-ai/claude-code; \
+    mv "$cc-linux-$cpu/claude" "$cc/bin/claude.exe"; \
+    rm -rf "$cc"-linux-*; \
+    chmod 0755 "$cc/bin/claude.exe"; \
+    test "$(head -c4 "$cc/bin/claude.exe" | od -An -tx1 | tr -d ' \n')" = 7f454c46; \
+    test -L node_modules/.bin/claude; \
     test -f node_modules/@paperclipai/server/dist/index.js; \
     test -f node_modules/@paperclipai/server/ui-dist/index.html
 
@@ -91,7 +103,7 @@ FROM ${DEBIAN_IMAGE} AS tools
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-       ca-certificates dash git openssh-client procps tar tini \
+       bash ca-certificates dash git openssh-client procps tar tini \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=distroless-ref / /distroless/
 # npm is pure JavaScript, so the build-platform copy works on any target.
@@ -103,7 +115,7 @@ COPY --from=install /opt/npm /rootfs/usr/local/lib/node_modules/npm
 # distroless convention) so image scanners can still see and CVE-match them.
 RUN set -eux; \
     mkdir -p /rootfs/usr/bin /rootfs/var/lib/dpkg/status.d; \
-    bins="/usr/bin/dash /usr/bin/git /usr/bin/ssh /usr/bin/tar /usr/bin/ps /usr/bin/tini"; \
+    bins="/usr/bin/bash /usr/bin/dash /usr/bin/git /usr/bin/ssh /usr/bin/tar /usr/bin/ps /usr/bin/tini"; \
     helpers="$(find /usr/lib/git-core -type f -perm -u+x)"; \
     for f in $bins $helpers; do \
       mkdir -p "/rootfs$(dirname "$f")"; cp -a "$f" "/rootfs$f"; \
@@ -201,6 +213,8 @@ ENV NODE_ENV=production \
     SERVE_UI=true \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_CACHE=/tmp/.npm \
+    SHELL=/usr/bin/bash \
+    DISABLE_AUTOUPDATER=1 \
     PATH=/nodejs/bin:/opt/paperclip/node_modules/.bin:/usr/local/bin:/usr/bin
 
 # Smoke-test the tool overlay in the real final filesystem (under QEMU for a
@@ -208,7 +222,7 @@ ENV NODE_ENV=production \
 # libraries resolve. git-remote-https prints its usage and exits non-zero when
 # it starts correctly. Kept free of JavaScript so no V8 runs under emulation.
 # Adds only an empty layer.
-RUN ["/usr/bin/sh", "-c", "set -e; git --version; tar --version >/dev/null; ps --version; ssh -V; tini --version; node --version; out=\"$(/usr/lib/git-core/git-remote-https 2>&1 || true)\"; case \"$out\" in *remote-curl*) ;; *) echo \"$out\" >&2; exit 1 ;; esac"]
+RUN ["/usr/bin/sh", "-c", "set -e; bash --version >/dev/null; git --version; tar --version >/dev/null; ps --version; ssh -V; tini --version; node --version; out=\"$(/usr/lib/git-core/git-remote-https 2>&1 || true)\"; case \"$out\" in *remote-curl*) ;; *) echo \"$out\" >&2; exit 1 ;; esac"]
 
 WORKDIR /opt/paperclip/node_modules/@paperclipai/server
 USER 65532:65532

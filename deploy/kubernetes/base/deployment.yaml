@@ -71,6 +71,21 @@ spec:
                   name: paperclip-secrets
                   key: PAPERCLIP_AGENT_JWT_SECRET
                   optional: true
+            # Credentials for the bundled Claude Code CLI (claude_local
+            # agents); set one of them. Paperclip passes its environment on
+            # to the claude processes it starts.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: paperclip-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: paperclip-secrets
+                  key: CLAUDE_CODE_OAUTH_TOKEN
+                  optional: true
             - name: TMPDIR
               value: /tmp
           securityContext:
