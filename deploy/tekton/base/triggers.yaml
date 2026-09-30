@@ -4,8 +4,8 @@
 #     spec.namespaceSelector includes this namespace, or
 #   - the dedicated one in ../components/eventlistener.
 #
-#   push to main       -> sha-<commit> + latest
-#   push of tag v*     -> sha-<commit> + <tag>
+#   push to main       -> sha-<commit> + latest + <paperclip version>
+#   push of tag v*     -> sha-<commit> + <tag> + <paperclip version>
 #
 # The GitHub interceptor validates the webhook signature with the secret in
 # THIS namespace, so events from other repositories sharing the same

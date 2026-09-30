@@ -149,6 +149,7 @@ and takes a few minutes. The image is about 1.4 GB, mostly the agent SDKs that
 | `sha-<commit>` | every build (commit of *this* repository) |
 | `latest` | push to `main`, after the vulnerability scan passes |
 | `vX.Y.Z` | push of a `v*` git tag, after the scan passes |
+| `<paperclip version>` (e.g. `2026.916.1`) | every clean build: the `@paperclipai/server` release installed in the image; moves to the newest build of that release |
 | `buildcache` | BuildKit layer cache; not a runnable image |
 
 Deploy by `sha-<commit>` or digest rather than `latest`. Images carry SBOM and
